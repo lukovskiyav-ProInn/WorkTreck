@@ -932,3 +932,37 @@ body {
   border-bottom: 1px solid var(--border);
 }
 .activity-item:last-child { border-bottom: none; }
+
+.chat-minimized {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 1100;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 24px;
+  padding: 12px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.chat-minimized:hover { filter: brightness(1.05); }
+.chat-panel-overlay {
+  /* don't block whole screen clicks on empty area optionally */
+  pointer-events: none;
+}
+.chat-panel-overlay.open .chat-panel {
+  pointer-events: auto;
+}
+.chat-panel-overlay:not(.open) { display: none !important; }
+.chat-item { cursor: pointer; }
+.chat-item.active {
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
