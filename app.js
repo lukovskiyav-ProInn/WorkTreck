@@ -126,6 +126,9 @@ let state = (typeof USE_SUPABASE !== 'undefined' && USE_SUPABASE)
   : loadState();
 let searchQuery = '';
 let currentTaskId = null;
+let chatReplyToId = null;
+let chatEditId = null;
+let chatPendingFile = null;
 
 function loadState() {
   try {
@@ -659,6 +662,10 @@ function renderAttachments(task) {
   });
 }
 
+function findMessage(task, msgId) {
+  return (task.messages || []).find(m => m.id === msgId);
+}
+
 function renderChat(task) {
   if (!task.messages) task.messages = [];
   const chat = document.getElementById('taskChat');
@@ -670,18 +677,90 @@ function renderChat(task) {
   chat.innerHTML = task.messages.map(m => {
     const author = getUser(m.authorId);
     const mine = m.authorId === state.currentUserId;
+    let replyHtml = '';
+    if (m.replyToId) {
+      const parent = findMessage(task, m.replyToId);
+      const preview = parent ? (parent.text || parent.file?.name || 'сообщение') : (m.replyPreview || 'сообщение');
+      replyHtml = `<div class="reply-quote">${escapeHtml(preview)}</div>`;
+    }
+    let fileHtml = '';
+    if (m.file && m.file.name) {
+      fileHtml = `<div class="msg-file" data-msg-file="${m.id}">📎 ${escapeHtml(m.file.name)}${m.file.size ? ' (' + formatSize(m.file.size) + ')' : ''}</div>`;
+    }
+    const actions = `
+      <div class="msg-actions">
+        <button type="button" data-act="reply" data-id="${m.id}">Ответить</button>
+        ${mine ? `<button type="button" data-act="edit" data-id="${m.id}">Изменить</button>` : ''}
+      </div>`;
     return `
-      <div class="chat-msg ${mine ? 'mine' : ''}">
+      <div class="chat-msg ${mine ? 'mine' : ''}" data-msg-id="${m.id}">
         <div class="author" style="display:flex;align-items:center;gap:6px;${!mine ? '' : 'justify-content:flex-end'}">
           ${!mine ? avatarHtml(author) : ''}
-          <span>${escapeHtml(author.name)} · ${m.time}</span>
+          <span>${escapeHtml(author.name)} · ${m.time}${m.edited ? '<span class="edited-mark">(изм.)</span>' : ''}</span>
           ${mine ? avatarHtml(author) : ''}
         </div>
-        <div class="bubble">${escapeHtml(m.text)}</div>
+        <div class="bubble">
+          ${replyHtml}
+          ${m.text ? escapeHtml(m.text) : ''}
+          ${fileHtml}
+        </div>
+        ${actions}
       </div>
     `;
   }).join('');
+
+  chat.querySelectorAll('[data-act="reply"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const msg = findMessage(task, btn.dataset.id);
+      if (!msg) return;
+      chatReplyToId = msg.id;
+      chatEditId = null;
+      const bar = document.getElementById('chatReplyBar');
+      const label = document.getElementById('chatReplyLabel');
+      if (bar) bar.style.display = 'block';
+      if (label) label.textContent = 'Ответ: ' + (msg.text || msg.file?.name || 'сообщение').slice(0, 80);
+      document.getElementById('chatMessage')?.focus();
+    });
+  });
+  chat.querySelectorAll('[data-act="edit"]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const msg = findMessage(task, btn.dataset.id);
+      if (!msg) return;
+      chatEditId = msg.id;
+      chatReplyToId = null;
+      const input = document.getElementById('chatMessage');
+      if (input) input.value = msg.text || '';
+      const bar = document.getElementById('chatReplyBar');
+      const label = document.getElementById('chatReplyLabel');
+      if (bar) bar.style.display = 'block';
+      if (label) label.textContent = 'Редактирование сообщения';
+      input?.focus();
+    });
+  });
+  chat.querySelectorAll('[data-msg-file]').forEach(el => {
+    el.addEventListener('click', () => {
+      const msg = findMessage(task, el.getAttribute('data-msg-file'));
+      if (msg?.file?.data) {
+        const a = document.createElement('a');
+        a.href = msg.file.data;
+        a.download = msg.file.name || 'file';
+        a.click();
+      }
+    });
+  });
   chat.scrollTop = chat.scrollHeight;
+}
+
+function clearChatComposer() {
+  chatReplyToId = null;
+  chatEditId = null;
+  chatPendingFile = null;
+  const bar = document.getElementById('chatReplyBar');
+  if (bar) bar.style.display = 'none';
+  const prev = document.getElementById('chatFilePreview');
+  if (prev) { prev.style.display = 'none'; prev.textContent = ''; }
+  const fin = document.getElementById('chatFileInput');
+  if (fin) fin.value = '';
 }
 
 function openTaskChatPanel() {
@@ -866,6 +945,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (document.getElementById('taskModal').classList.contains('open')) closeModal();
     if (document.getElementById('inviteModal').classList.contains('open')) document.getElementById('inviteModal').classList.remove('open');
+    if (document.getElementById('chatPanelOverlay')?.classList.contains('open')) closeTaskChatPanel();
   }
 });
 
@@ -892,23 +972,50 @@ document.getElementById('newSubtask').addEventListener('keydown', e => {
 document.getElementById('btnSendMessage').addEventListener('click', async () => {
   if (!currentTaskId) return;
   const input = document.getElementById('chatMessage');
-  const text = input.value.trim();
-  if (!text) return;
+  const text = (input?.value || '').trim();
+  if (!text && !chatPendingFile) return;
   const found = findTask(currentTaskId);
-  if (found) {
-    const time = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-    if (!found.task.messages) found.task.messages = [];
-    const msg = { id: uid(), authorId: state.currentUserId, text, time };
-    found.task.messages.push(msg);
-    input.value = '';
-    saveState(); renderChat(found.task);
-    await persistMessage(msg, found.task.id);
-    for (const uid of getTaskAssigneeIds(found.task)) {
-      if (uid === state.currentUserId) continue;
-      const user = getUser(uid);
-      console.log('[Уведомление] Новый ответ в задаче "' + found.task.title + '" → ' + user.email);
-      notifyTask({ type: 'comment', userId: uid, taskTitle: found.task.title, message: text });
+  if (!found) return;
+  if (!found.task.messages) found.task.messages = [];
+
+  // Редактирование
+  if (chatEditId) {
+    const msg = findMessage(found.task, chatEditId);
+    if (msg && msg.authorId === state.currentUserId) {
+      msg.text = text;
+      msg.edited = true;
+      if (chatPendingFile) msg.file = chatPendingFile;
+      input.value = '';
+      clearChatComposer();
+      saveState();
+      renderChat(found.task);
+      await persistMessage(msg, found.task.id);
     }
+    return;
+  }
+
+  const time = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const parent = chatReplyToId ? findMessage(found.task, chatReplyToId) : null;
+  const msg = {
+    id: uid(),
+    authorId: state.currentUserId,
+    text,
+    time,
+    replyToId: chatReplyToId || null,
+    replyPreview: parent ? (parent.text || parent.file?.name || '') : null,
+    file: chatPendingFile || null
+  };
+  found.task.messages.push(msg);
+  input.value = '';
+  clearChatComposer();
+  saveState();
+  renderChat(found.task);
+  await persistMessage(msg, found.task.id);
+  for (const id of getTaskAssigneeIds(found.task)) {
+    if (id === state.currentUserId) continue;
+    const user = getUser(id);
+    console.log('[Уведомление] Новый ответ в задаче "' + found.task.title + '" → ' + user.email);
+    notifyTask({ type: 'comment', userId: id, taskTitle: found.task.title, message: text || ('Файл: ' + (msg.file?.name || '')) });
   }
 });
 
@@ -940,9 +1047,12 @@ document.getElementById('btnReset').addEventListener('click', () => {
 // ===================== NOTIFICATIONS =====================
 async function notifyTask({ type, userId, taskTitle, message }) {
   if (!isCloudMode || !supabase || !userId) return;
-  if (userId === state.currentUserId) return; // не уведомляем себя
+  if (userId === state.currentUserId) return;
   const user = getUser(userId);
-  if (!user?.email) return;
+  if (!user?.email) {
+    console.warn('[YouGile] notify: нет email у пользователя', userId);
+    return;
+  }
   const from = getCurrentUser();
   try {
     const { data, error } = await supabase.functions.invoke('notify-task', {
@@ -956,8 +1066,15 @@ async function notifyTask({ type, userId, taskTitle, message }) {
         company_name: state.company?.name || ''
       }
     });
-    if (error) console.warn('[YouGile] notify error', error);
-    else console.log('[YouGile] notify sent', type, '→', user.email, data);
+    if (error) {
+      console.warn('[YouGile] notify error', error);
+      return;
+    }
+    if (data && data.error) {
+      console.warn('[YouGile] notify failed:', data.error, data.hint || '');
+      return;
+    }
+    console.log('[YouGile] notify sent', type, '→', user.email, data);
   } catch (e) {
     console.warn('[YouGile] notify exception', e);
   }
@@ -1072,7 +1189,19 @@ async function persistSubtask(sub, taskId) {
 async function persistMessage(msg, taskId) {
   if (!isCloudMode || !supabase || !msg) return;
   try {
-    const { error } = await supabase.from('task_messages').upsert({ id: msg.id, task_id: taskId, author_id: msg.authorId, text: msg.text }, { onConflict: 'id' });
+    const row = {
+      id: msg.id,
+      task_id: taskId,
+      author_id: msg.authorId,
+      text: msg.text || '',
+      reply_to: msg.replyToId || null,
+      edited_at: msg.edited ? new Date().toISOString() : null,
+      file_name: msg.file?.name || null,
+      file_size: msg.file?.size || null,
+      file_path: msg.file?.storage_path || null,
+      file_data: msg.file?.data || null
+    };
+    const { error } = await supabase.from('task_messages').upsert(row, { onConflict: 'id' });
     if (error) console.warn('[YouGile] persist message', error);
   } catch (e) { console.warn('[YouGile] persistMessage', e); }
 }
@@ -1148,10 +1277,18 @@ async function loadFromCloud() {
           c.tasks = [];
           for (const t of tasks || []) {
             const { data: subtasks } = await supabase.from('subtasks').select('id, title, done').eq('task_id', t.id).order('position');
-            const { data: messages } = await supabase.from('task_messages').select('id, author_id, text, created_at').eq('task_id', t.id).order('created_at');
+            const { data: messages } = await supabase.from('task_messages').select('id, author_id, text, created_at, reply_to, edited_at, file_name, file_size, file_path, file_data').eq('task_id', t.id).order('created_at');
             const { data: attachments } = await supabase.from('attachments').select('id, name, size, mime_type, storage_path').eq('task_id', t.id).order('created_at');
             t.subtasks = (subtasks || []).map(s => ({ id: s.id, title: s.title, done: s.done }));
-            t.messages = (messages || []).map(m => ({ id: m.id, authorId: m.author_id, text: m.text, time: new Date(m.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) }));
+            t.messages = (messages || []).map(m => ({
+              id: m.id,
+              authorId: m.author_id,
+              text: m.text,
+              time: new Date(m.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+              replyToId: m.reply_to || null,
+              edited: !!m.edited_at,
+              file: m.file_name ? { name: m.file_name, size: m.file_size, data: m.file_data, storage_path: m.file_path } : null
+            }));
             t.attachments = (attachments || []).map(a => ({ id: a.id, name: a.name, size: a.size, type: a.mime_type, storage_path: a.storage_path }));
             t.assigneeId = t.assignee_id || null;
             try {
@@ -1518,6 +1655,35 @@ if (btnRenameBoard) {
   });
 }
 
+
+
+const chatReplyCancel = document.getElementById('chatReplyCancel');
+if (chatReplyCancel) {
+  chatReplyCancel.addEventListener('click', () => {
+    clearChatComposer();
+    const input = document.getElementById('chatMessage');
+    if (input) input.value = '';
+  });
+}
+const chatFileInput = document.getElementById('chatFileInput');
+if (chatFileInput) {
+  chatFileInput.addEventListener('change', async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) {
+      alert('Файл в чате до 3 МБ');
+      e.target.value = '';
+      return;
+    }
+    const data = await readFileAsDataURL(file);
+    chatPendingFile = { name: file.name, size: file.size, type: file.type, data };
+    const prev = document.getElementById('chatFilePreview');
+    if (prev) {
+      prev.style.display = 'block';
+      prev.textContent = file.name;
+    }
+  });
+}
 
 const btnOpenTaskChat = document.getElementById('btnOpenTaskChat');
 if (btnOpenTaskChat) {

@@ -168,7 +168,18 @@
           <button type="button" class="btn-close" id="btnCloseChatPanel">×</button>
         </div>
         <div class="chat-panel-body" id="taskChat"></div>
+        <div class="chat-reply-bar" id="chatReplyBar" style="display:none">
+          <div class="chat-reply-info">
+            <span id="chatReplyLabel">Ответ на сообщение</span>
+            <button type="button" id="chatReplyCancel" title="Отменить">×</button>
+          </div>
+        </div>
         <div class="chat-panel-footer">
+          <label class="chat-attach-btn" title="Прикрепить файл">
+            📎
+            <input type="file" id="chatFileInput" hidden />
+          </label>
+          <div id="chatFilePreview" class="chat-file-preview" style="display:none"></div>
           <input type="text" id="chatMessage" placeholder="Написать сообщение..." />
           <button type="button" class="btn primary" id="btnSendMessage">Отправить</button>
         </div>
