@@ -135,6 +135,10 @@ const CARD_COLORS = ['', 'blue', 'green', 'orange', 'red', 'purple', 'pink'];
 const COLOR_HEX = { blue:'#3b82f6', green:'#16a34a', orange:'#d97706', red:'#dc2626', purple:'#7c3aed', pink:'#db2777' };
 
 let currentTaskId = null;
+/** Контекст чата: { type: 'task'|'general', taskId?: string } */
+let chatContext = null;
+let chatPanelMode = 'closed'; // closed | open | minimized
+
 const expandedSubtasks = new Set(); // task ids with open subtask list
 let chatReplyToId = null;
 let chatEditId = null;
@@ -193,6 +197,10 @@ function taskTimeTotal(task) {
     total += Math.floor((Date.now() - activeTimer.startedAt) / 1000);
   }
   return total;
+}
+
+function ensureChatState() {
+  if (!state.generalChat) state.generalChat = [];
 }
 
 function saveState() {
@@ -892,6 +900,12 @@ function openTask(taskId) {
     return;
   }
   currentTaskId = taskId;
+  // если чат открыт/свёрнут в режиме задачи — переключаем на эту задачу
+  if (chatContext && chatContext.type === 'task' && chatPanelMode !== 'closed') {
+    chatContext = { type: 'task', taskId };
+    clearChatComposer();
+    refreshChatPanel();
+  }
   const { task } = found;
   document.getElementById('taskTitle').value = task.title;
   document.getElementById('taskDescription').value = task.description || '';
@@ -1185,23 +1199,115 @@ function clearChatComposer() {
   if (fin) fin.value = '';
 }
 
-function openTaskChatPanel() {
-  if (!currentTaskId) return;
-  const found = findTask(currentTaskId);
-  if (!found) return;
-  const titleEl = document.getElementById('chatPanelTaskTitle');
-  if (titleEl) titleEl.textContent = found.task.title || 'Задача';
-  renderChat(found.task);
+function setChatPanelMode(mode) {
+  chatPanelMode = mode;
   const overlay = document.getElementById('chatPanelOverlay');
-  if (overlay) overlay.classList.add('open');
+  const mini = document.getElementById('chatMinimized');
+  if (overlay) {
+    if (mode === 'open') overlay.classList.add('open');
+    else overlay.classList.remove('open');
+  }
+  if (mini) {
+    mini.style.display = mode === 'minimized' ? 'flex' : 'none';
+    const label = document.getElementById('chatMinLabel');
+    if (label) {
+      if (chatContext?.type === 'general') label.textContent = 'Общий чат';
+      else if (chatContext?.taskId) {
+        const f = findTask(chatContext.taskId);
+        label.textContent = f ? (f.task.title || 'Чат').slice(0, 24) : 'Чат';
+      } else label.textContent = 'Чат';
+    }
+  }
+}
+
+function refreshChatPanel() {
+  ensureChatState();
+  const titleEl = document.getElementById('chatPanelTitle');
+  const subEl = document.getElementById('chatPanelTaskTitle');
+  if (!chatContext) return;
+  if (chatContext.type === 'general') {
+    if (titleEl) titleEl.textContent = 'Общий чат';
+    if (subEl) subEl.textContent = state.company?.name || 'Компания';
+    renderGeneralChat();
+  } else if (chatContext.type === 'task' && chatContext.taskId) {
+    const found = findTask(chatContext.taskId);
+    if (titleEl) titleEl.textContent = 'Чат задачи';
+    if (subEl) subEl.textContent = found ? (found.task.title || 'Задача') : 'Задача недоступна';
+    if (found) renderChat(found.task);
+    else {
+      const chat = document.getElementById('taskChat');
+      if (chat) chat.innerHTML = '<div style="color:var(--text-muted);padding:8px 0">Задача не найдена</div>';
+    }
+  }
+  // highlight sidebar
+  document.getElementById('btnGeneralChat')?.classList.toggle('active', chatContext.type === 'general');
+}
+
+function openTaskChatPanel(taskId) {
+  const id = taskId || currentTaskId || chatContext?.taskId;
+  if (!id) return;
+  const found = findTask(id);
+  if (!found) return;
+  chatContext = { type: 'task', taskId: id };
+  clearChatComposer();
+  refreshChatPanel();
+  setChatPanelMode('open');
+  const input = document.getElementById('chatMessage');
+  if (input) setTimeout(() => input.focus(), 50);
+}
+
+function openGeneralChat() {
+  ensureChatState();
+  chatContext = { type: 'general' };
+  clearChatComposer();
+  refreshChatPanel();
+  setChatPanelMode('open');
   const input = document.getElementById('chatMessage');
   if (input) setTimeout(() => input.focus(), 50);
 }
 
 function closeTaskChatPanel() {
-  const overlay = document.getElementById('chatPanelOverlay');
-  if (overlay) overlay.classList.remove('open');
+  chatContext = null;
+  clearChatComposer();
+  setChatPanelMode('closed');
 }
+
+function minimizeChatPanel() {
+  if (!chatContext) return;
+  setChatPanelMode('minimized');
+}
+
+function expandChatPanel() {
+  if (!chatContext) return;
+  refreshChatPanel();
+  setChatPanelMode('open');
+}
+
+function renderGeneralChat() {
+  ensureChatState();
+  const chat = document.getElementById('taskChat');
+  if (!chat) return;
+  const messages = state.generalChat || [];
+  if (!messages.length) {
+    chat.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">Общий чат компании. Напишите первое сообщение.</div>';
+    return;
+  }
+  chat.innerHTML = messages.map(m => {
+    const author = getUser(m.authorId) || { name: m.authorName || 'Участник' };
+    const mine = m.authorId === state.currentUserId;
+    return `
+      <div class="chat-msg ${mine ? 'mine' : ''}">
+        <div class="author" style="display:flex;align-items:center;gap:6px;${!mine ? '' : 'justify-content:flex-end'}">
+          ${!mine ? avatarHtml(author) : ''}
+          <span>${escapeHtml(author.name)} · ${m.time}</span>
+          ${mine ? avatarHtml(author) : ''}
+        </div>
+        <div class="bubble">${escapeHtml(m.text)}</div>
+      </div>`;
+  }).join('');
+  chat.scrollTop = chat.scrollHeight;
+}
+
 
 document.getElementById('fileInput').addEventListener('change', async (e) => {
   if (!currentTaskId) return;
@@ -1376,9 +1482,9 @@ document.getElementById('taskModal').addEventListener('click', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (document.getElementById('taskModal').classList.contains('open')) closeModal();
-    if (document.getElementById('inviteModal').classList.contains('open')) document.getElementById('inviteModal').classList.remove('open');
-    if (document.getElementById('companyModal')?.classList.contains('open')) closeCompanyModal();
-    if (document.getElementById('chatPanelOverlay')?.classList.contains('open')) closeTaskChatPanel();
+    else if (document.getElementById('inviteModal').classList.contains('open')) document.getElementById('inviteModal').classList.remove('open');
+    else if (document.getElementById('companyModal')?.classList.contains('open')) closeCompanyModal();
+    else if (chatPanelMode === 'open') minimizeChatPanel();
   }
 });
 
@@ -1418,15 +1524,35 @@ document.getElementById('newSubtask').addEventListener('keydown', e => {
 });
 
 document.getElementById('btnSendMessage').addEventListener('click', async () => {
-  if (!currentTaskId) return;
   const input = document.getElementById('chatMessage');
   const text = (input?.value || '').trim();
   if (!text && !chatPendingFile) return;
-  const found = findTask(currentTaskId);
+
+  // Общий чат
+  if (chatContext?.type === 'general') {
+    ensureChatState();
+    const time = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    state.generalChat.push({
+      id: uid(),
+      authorId: state.currentUserId,
+      authorName: getCurrentUser()?.name || '',
+      text,
+      time
+    });
+    if (state.generalChat.length > 200) state.generalChat = state.generalChat.slice(-200);
+    input.value = '';
+    clearChatComposer();
+    saveState();
+    renderGeneralChat();
+    return;
+  }
+
+  const taskId = chatContext?.taskId || currentTaskId;
+  if (!taskId) return;
+  const found = findTask(taskId);
   if (!found) return;
   if (!found.task.messages) found.task.messages = [];
 
-  // Редактирование
   if (chatEditId) {
     const msg = findMessage(found.task, chatEditId);
     if (msg && msg.authorId === state.currentUserId) {
@@ -2937,11 +3063,22 @@ if (chatFileInput) {
   });
 }
 
+
+document.getElementById('btnMinimizeChat')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  minimizeChatPanel();
+});
+document.getElementById('chatMinimized')?.addEventListener('click', () => expandChatPanel());
+document.getElementById('btnGeneralChat')?.addEventListener('click', () => openGeneralChat());
+document.getElementById('btnPersonalChats')?.addEventListener('click', () => {
+  alert('Личные чаты — в следующей версии. Пока доступны общий чат и чат задачи.');
+});
+
 const btnOpenTaskChat = document.getElementById('btnOpenTaskChat');
 if (btnOpenTaskChat) {
   btnOpenTaskChat.addEventListener('click', (e) => {
     e.preventDefault();
-    openTaskChatPanel();
+    openTaskChatPanel(currentTaskId);
   });
 }
 const btnCloseChatPanel = document.getElementById('btnCloseChatPanel');
@@ -2951,7 +3088,7 @@ if (btnCloseChatPanel) {
 const chatPanelOverlay = document.getElementById('chatPanelOverlay');
 if (chatPanelOverlay) {
   chatPanelOverlay.addEventListener('click', (e) => {
-    if (e.target === chatPanelOverlay) closeTaskChatPanel();
+    if (e.target === chatPanelOverlay) minimizeChatPanel();
   });
 }
 
