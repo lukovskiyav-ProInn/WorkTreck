@@ -110,8 +110,8 @@
         <div class="modal-body">
           <div class="task-meta">
             <div class="meta-item" style="grid-column: 1 / -1">
-              <label>Исполнители (Ctrl/Cmd — несколько)</label>
-              <select id="taskAssignee" multiple size="4" style="min-height:90px"></select>
+              <label>Исполнители</label>
+              <div id="taskAssigneeList" class="assignee-picker"></div>
             </div>
             <div class="meta-item">
               <label>Дедлайн</label>
@@ -150,14 +150,27 @@
             </div>
           </div>
 
-          <div class="task-section chat-section">
-            <h4>Чат задачи</h4>
-            <div id="taskChat" class="task-chat"></div>
-            <div class="chat-input">
-              <input type="text" id="chatMessage" placeholder="Написать сообщение..." />
-              <button id="btnSendMessage">Отправить</button>
-            </div>
+          <div class="task-section">
+            <button type="button" class="btn primary" id="btnOpenTaskChat" style="width:100%">💬 Открыть чат задачи</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Task Chat Panel (YouGile-style side panel) -->
+    <div class="chat-panel-overlay" id="chatPanelOverlay">
+      <div class="chat-panel" id="chatPanel">
+        <div class="chat-panel-header">
+          <div>
+            <div class="chat-panel-title">Чат задачи</div>
+            <div class="chat-panel-subtitle" id="chatPanelTaskTitle">—</div>
+          </div>
+          <button type="button" class="btn-close" id="btnCloseChatPanel">×</button>
+        </div>
+        <div class="chat-panel-body" id="taskChat"></div>
+        <div class="chat-panel-footer">
+          <input type="text" id="chatMessage" placeholder="Написать сообщение..." />
+          <button type="button" class="btn primary" id="btnSendMessage">Отправить</button>
         </div>
       </div>
     </div>

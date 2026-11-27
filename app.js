@@ -338,8 +338,9 @@ async function deleteUser(userId) {
     for (const board of project.boards) {
       for (const col of board.columns) {
         for (const task of col.tasks) {
-          if (task.assigneeId === userId) {
-            task.assigneeId = null;
+          const ids = getTaskAssigneeIds(task);
+          if (ids.includes(userId) || task.assigneeId === userId) {
+            setTaskAssignees(task, ids.filter(id => id !== userId));
             persistTask(task, col.id);
           }
         }
@@ -376,12 +377,24 @@ function setTaskAssignees(task, ids) {
   task.assigneeId = unique[0] || null;
 }
 
-function renderAssigneeSelect() {
-  const select = document.getElementById('taskAssignee');
-  if (!select) return;
-  select.innerHTML = (state.users || []).map(u =>
-    `<option value="${u.id}">${escapeHtml(u.name)} (${roleLabel(u.role)})</option>`
-  ).join('');
+function renderAssigneeSelect(selectedIds) {
+  const box = document.getElementById('taskAssigneeList');
+  if (!box) return;
+  const selected = new Set(selectedIds || []);
+  box.innerHTML = (state.users || []).map(u => `
+    <label class="assignee-option">
+      <input type="checkbox" value="${u.id}" ${selected.has(u.id) ? 'checked' : ''} />
+      ${avatarHtml(u)}
+      <span class="nm">${escapeHtml(u.name)}</span>
+      <span class="em">${escapeHtml(roleLabel(u.role))}</span>
+    </label>
+  `).join('') || '<div style="color:var(--text-muted);font-size:13px;padding:6px">Нет сотрудников</div>';
+}
+
+function readSelectedAssigneeIds() {
+  const box = document.getElementById('taskAssigneeList');
+  if (!box) return [];
+  return Array.from(box.querySelectorAll('input[type="checkbox"]:checked')).map(el => el.value);
 }
 
 function renderBoard() {
@@ -456,7 +469,7 @@ function renderCard(task) {
     <div class="card" draggable="true" data-task-id="${task.id}">
       <div class="card-title">${escapeHtml(task.title)}</div>
       <div class="card-meta">
-        ${assignees.map(a => `<span class="sticker assignee">👤 ${escapeHtml(a.name)}</span>`).join('')}
+        ${assignees.length ? `<span class="avatar-stack">${assignees.slice(0,5).map(a => avatarHtml(a)).join('')}${assignees.length > 5 ? `<span class="sticker">+${assignees.length-5}</span>` : ''}</span>` : ''}
         ${task.deadline ? `<span class="sticker deadline">📅 ${formatDate(task.deadline)}</span>` : ''}
         ${priorityLabel ? `<span class="sticker ${priorityClass}">${priorityLabel}</span>` : ''}
         ${total ? `<span class="sticker">${done}/${total}</span>` : ''}
@@ -477,6 +490,22 @@ function escapeHtml(text) {
   div.textContent = text || '';
   return div.innerHTML;
 }
+
+function avatarColor(seed) {
+  const colors = ['#5b8def','#8b5cf6','#34a853','#f9ab00','#ea4335','#00bfa5','#ff6d00','#7c4dff'];
+  let h = 0;
+  const s = String(seed || '');
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return colors[h % colors.length];
+}
+
+function avatarHtml(user, sizeClass) {
+  const name = (user && user.name) || '?';
+  const letter = name[0].toUpperCase();
+  const bg = avatarColor(user && (user.id || user.email || name));
+  return `<span class="av ${sizeClass || ''}" style="background:${bg}" title="${escapeHtml(name)}">${letter}</span>`;
+}
+
 
 let draggedTaskId = null;
 
@@ -524,13 +553,7 @@ function openTask(taskId) {
   const { task } = found;
   document.getElementById('taskTitle').value = task.title;
   document.getElementById('taskDescription').value = task.description || '';
-  const assigneeSelect = document.getElementById('taskAssignee');
-  if (assigneeSelect) {
-    const ids = getTaskAssigneeIds(task);
-    Array.from(assigneeSelect.options).forEach(opt => {
-      opt.selected = ids.includes(opt.value);
-    });
-  }
+  renderAssigneeSelect(getTaskAssigneeIds(task));
   document.getElementById('taskDeadline').value = task.deadline || '';
   document.getElementById('taskPriority').value = task.priority || 'normal';
   renderSubtasks(task);
@@ -547,9 +570,7 @@ function closeModal() {
       const prevIds = getTaskAssigneeIds(found.task);
       found.task.title = document.getElementById('taskTitle').value.trim() || 'Без названия';
       found.task.description = document.getElementById('taskDescription').value;
-      const sel = document.getElementById('taskAssignee');
-      const selectedIds = sel ? Array.from(sel.selectedOptions).map(o => o.value) : [];
-      setTaskAssignees(found.task, selectedIds);
+      setTaskAssignees(found.task, readSelectedAssigneeIds());
       found.task.deadline = document.getElementById('taskDeadline').value;
       found.task.priority = document.getElementById('taskPriority').value;
       const newIds = getTaskAssigneeIds(found.task).filter(id => !prevIds.includes(id));
@@ -641,8 +662,9 @@ function renderAttachments(task) {
 function renderChat(task) {
   if (!task.messages) task.messages = [];
   const chat = document.getElementById('taskChat');
+  if (!chat) return;
   if (!task.messages.length) {
-    chat.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">Пока нет сообщений</div>';
+    chat.innerHTML = '<div style="color:var(--text-muted);font-size:13px;padding:8px 0">Пока нет сообщений. Напишите первое.</div>';
     return;
   }
   chat.innerHTML = task.messages.map(m => {
@@ -650,12 +672,34 @@ function renderChat(task) {
     const mine = m.authorId === state.currentUserId;
     return `
       <div class="chat-msg ${mine ? 'mine' : ''}">
-        <div class="author">${escapeHtml(author.name)} · ${m.time}</div>
+        <div class="author" style="display:flex;align-items:center;gap:6px;${!mine ? '' : 'justify-content:flex-end'}">
+          ${!mine ? avatarHtml(author) : ''}
+          <span>${escapeHtml(author.name)} · ${m.time}</span>
+          ${mine ? avatarHtml(author) : ''}
+        </div>
         <div class="bubble">${escapeHtml(m.text)}</div>
       </div>
     `;
   }).join('');
   chat.scrollTop = chat.scrollHeight;
+}
+
+function openTaskChatPanel() {
+  if (!currentTaskId) return;
+  const found = findTask(currentTaskId);
+  if (!found) return;
+  const titleEl = document.getElementById('chatPanelTaskTitle');
+  if (titleEl) titleEl.textContent = found.task.title || 'Задача';
+  renderChat(found.task);
+  const overlay = document.getElementById('chatPanelOverlay');
+  if (overlay) overlay.classList.add('open');
+  const input = document.getElementById('chatMessage');
+  if (input) setTimeout(() => input.focus(), 50);
+}
+
+function closeTaskChatPanel() {
+  const overlay = document.getElementById('chatPanelOverlay');
+  if (overlay) overlay.classList.remove('open');
 }
 
 document.getElementById('fileInput').addEventListener('change', async (e) => {
@@ -1471,6 +1515,25 @@ if (btnRenameBoard) {
     saveState();
     render();
     await persistBoard(board, getCurrentProject().id);
+  });
+}
+
+
+const btnOpenTaskChat = document.getElementById('btnOpenTaskChat');
+if (btnOpenTaskChat) {
+  btnOpenTaskChat.addEventListener('click', (e) => {
+    e.preventDefault();
+    openTaskChatPanel();
+  });
+}
+const btnCloseChatPanel = document.getElementById('btnCloseChatPanel');
+if (btnCloseChatPanel) {
+  btnCloseChatPanel.addEventListener('click', closeTaskChatPanel);
+}
+const chatPanelOverlay = document.getElementById('chatPanelOverlay');
+if (chatPanelOverlay) {
+  chatPanelOverlay.addEventListener('click', (e) => {
+    if (e.target === chatPanelOverlay) closeTaskChatPanel();
   });
 }
 

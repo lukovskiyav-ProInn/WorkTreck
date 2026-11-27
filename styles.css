@@ -1117,3 +1117,105 @@ body {
   border-radius: 6px;
   font-size: 13px;
 }
+
+/* Assignee picker with avatars */
+.assignee-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+}
+.assignee-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.assignee-option:hover { background: var(--hover); }
+.assignee-option input { accent-color: var(--primary); width: 16px; height: 16px; }
+.assignee-option .av {
+  width: 28px; height: 28px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #fff; flex-shrink: 0;
+}
+.assignee-option .nm { font-size: 13px; flex: 1; }
+.assignee-option .em { font-size: 11px; color: var(--text-muted); }
+
+/* Avatars on cards */
+.avatar-stack {
+  display: flex;
+  align-items: center;
+}
+.avatar-stack .av {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 700; color: #fff;
+  border: 2px solid var(--card); margin-left: -6px;
+}
+.avatar-stack .av:first-child { margin-left: 0; }
+
+/* Chat side panel */
+.chat-panel-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: none;
+  justify-content: flex-end;
+  z-index: 1200;
+}
+.chat-panel-overlay.open { display: flex; }
+.chat-panel {
+  width: 400px;
+  max-width: 100%;
+  height: 100%;
+  background: var(--sidebar);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -8px 0 24px rgba(0,0,0,0.35);
+}
+.chat-panel-header {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.chat-panel-title { font-weight: 600; font-size: 15px; }
+.chat-panel-subtitle {
+  font-size: 12px; color: var(--text-muted); margin-top: 4px;
+  max-width: 300px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chat-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.chat-panel-footer {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 8px;
+}
+.chat-panel-footer input {
+  flex: 1;
+  background: var(--card);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+}
+.chat-panel-footer input:focus { border-color: var(--primary); }
