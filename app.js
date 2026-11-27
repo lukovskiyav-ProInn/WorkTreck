@@ -420,11 +420,34 @@ function canManageUsers() {
   return roleRank(getMyRole()) >= 90;
 }
 
-/** Исполнитель видит только свои задачи; остальные роли — все (с учётом фильтров) */
+/**
+ * Видимость задач:
+ * - Администратор, ГИП, ГАП — все задачи, все отделы
+ * - Руководитель — задачи своего отдела (исполнители из того же department)
+ * - Исполнитель — только задачи, где он назначен
+ */
 function canViewTask(task) {
-  const rank = roleRank(getMyRole());
-  if (rank >= 40) return true; // руководитель и выше
+  const me = state.users.find(u => u.id === state.currentUserId);
+  const role = me?.role || 'member';
+  const rank = roleRank(role);
+
+  // Администратор / ГИП / ГАП — полный обзор
+  if (rank >= 60) return true;
+
   const ids = getTaskAssigneeIds(task);
+
+  // Руководитель — отдел
+  if (rank >= 40) {
+    const myDep = (me?.department || '').trim();
+    if (!myDep) return true; // отдел не указан — не режем видимость
+    if (!ids.length) return true; // без исполнителей — видна руководителю
+    return ids.some(id => {
+      const u = getUser(id);
+      return u && (u.department || '').trim() === myDep;
+    });
+  }
+
+  // Исполнитель — только свои
   return ids.includes(state.currentUserId);
 }
 
