@@ -261,17 +261,41 @@ function renderProjects() {
   });
 }
 
+function isOwner() {
+  const me = state.users.find(u => u.id === state.currentUserId);
+  return me && me.role === 'owner';
+}
+
+function isAdminOrOwner() {
+  const me = state.users.find(u => u.id === state.currentUserId);
+  return me && (me.role === 'owner' || me.role === 'admin');
+}
+
+function roleLabel(role) {
+  if (role === 'owner') return 'Владелец';
+  if (role === 'admin') return 'Админ';
+  return 'Исполнитель';
+}
+
 function renderUsers() {
   const list = document.getElementById('usersList');
   if (!list) return;
+  const owner = isOwner();
   list.innerHTML = (state.users || []).map(u => {
-    const canDelete = u.role !== 'owner' && u.id !== state.currentUserId;
+    const canDelete = owner && u.role !== 'owner' && u.id !== state.currentUserId;
+    const canEditRole = owner && u.id !== state.currentUserId && u.role !== 'owner';
     return `
       <div class="user-item" data-id="${u.id}">
         <div class="u-avatar">${(u.name || '?')[0].toUpperCase()}</div>
         <div class="u-info">
           <div class="u-name">${escapeHtml(u.name)}</div>
           <div class="u-email">${escapeHtml(u.email)}</div>
+          ${canEditRole ? `
+            <select class="role-select" data-id="${u.id}" title="Роль">
+              <option value="member" ${u.role === 'member' ? 'selected' : ''}>Исполнитель</option>
+              <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Админ</option>
+            </select>
+          ` : `<div class="u-role">${roleLabel(u.role)}</div>`}
         </div>
         ${canDelete ? `<button class="u-remove" data-id="${u.id}" title="Удалить сотрудника">×</button>` : ''}
       </div>
@@ -282,6 +306,22 @@ function renderUsers() {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       deleteUser(btn.dataset.id);
+    });
+  });
+  list.querySelectorAll('.role-select').forEach(sel => {
+    sel.addEventListener('change', async () => {
+      const id = sel.dataset.id;
+      const role = sel.value;
+      const u = state.users.find(x => x.id === id);
+      if (!u) return;
+      u.role = role;
+      saveState();
+      render();
+      if (isCloudMode && supabase) {
+        const { error } = await supabase.from('profiles').update({ role }).eq('id', id);
+        if (error) console.warn('[YouGile] role update', error);
+        else console.log('[YouGile] role updated', id, role);
+      }
     });
   });
 }
@@ -323,13 +363,25 @@ async function deleteUser(userId) {
   }
 }
 
+function getTaskAssigneeIds(task) {
+  if (!task) return [];
+  if (Array.isArray(task.assigneeIds) && task.assigneeIds.length) return task.assigneeIds.filter(Boolean);
+  if (task.assigneeId) return [task.assigneeId];
+  return [];
+}
+
+function setTaskAssignees(task, ids) {
+  const unique = Array.from(new Set((ids || []).filter(Boolean)));
+  task.assigneeIds = unique;
+  task.assigneeId = unique[0] || null;
+}
+
 function renderAssigneeSelect() {
   const select = document.getElementById('taskAssignee');
   if (!select) return;
-  const current = select.value;
-  select.innerHTML = '<option value="">Не назначен</option>' +
-    state.users.map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('');
-  if (current) select.value = current;
+  select.innerHTML = (state.users || []).map(u =>
+    `<option value="${u.id}">${escapeHtml(u.name)} (${roleLabel(u.role)})</option>`
+  ).join('');
 }
 
 function renderBoard() {
@@ -396,7 +448,7 @@ function renderCard(task) {
   const done = (task.subtasks || []).filter(s => s.done).length;
   const total = (task.subtasks || []).length;
   const progress = total ? Math.round((done / total) * 100) : 0;
-  const assignee = task.assigneeId ? getUser(task.assigneeId) : null;
+  const assignees = getTaskAssigneeIds(task).map(id => getUser(id)).filter(u => u && u.name);
   const filesCount = (task.attachments || []).length;
   const priorityClass = task.priority === 'urgent' ? 'priority-urgent' : task.priority === 'high' ? 'priority-high' : '';
   const priorityLabel = task.priority === 'urgent' ? '🔥 Срочно' : task.priority === 'high' ? '⚡ Важно' : '';
@@ -404,7 +456,7 @@ function renderCard(task) {
     <div class="card" draggable="true" data-task-id="${task.id}">
       <div class="card-title">${escapeHtml(task.title)}</div>
       <div class="card-meta">
-        ${assignee ? `<span class="sticker assignee">👤 ${escapeHtml(assignee.name)}</span>` : ''}
+        ${assignees.map(a => `<span class="sticker assignee">👤 ${escapeHtml(a.name)}</span>`).join('')}
         ${task.deadline ? `<span class="sticker deadline">📅 ${formatDate(task.deadline)}</span>` : ''}
         ${priorityLabel ? `<span class="sticker ${priorityClass}">${priorityLabel}</span>` : ''}
         ${total ? `<span class="sticker">${done}/${total}</span>` : ''}
@@ -472,7 +524,13 @@ function openTask(taskId) {
   const { task } = found;
   document.getElementById('taskTitle').value = task.title;
   document.getElementById('taskDescription').value = task.description || '';
-  document.getElementById('taskAssignee').value = task.assigneeId || '';
+  const assigneeSelect = document.getElementById('taskAssignee');
+  if (assigneeSelect) {
+    const ids = getTaskAssigneeIds(task);
+    Array.from(assigneeSelect.options).forEach(opt => {
+      opt.selected = ids.includes(opt.value);
+    });
+  }
   document.getElementById('taskDeadline').value = task.deadline || '';
   document.getElementById('taskPriority').value = task.priority || 'normal';
   renderSubtasks(task);
@@ -486,16 +544,19 @@ function closeModal() {
   if (currentTaskId) {
     const found = findTask(currentTaskId);
     if (found) {
-      const prevAssignee = found.task.assigneeId;
+      const prevIds = getTaskAssigneeIds(found.task);
       found.task.title = document.getElementById('taskTitle').value.trim() || 'Без названия';
       found.task.description = document.getElementById('taskDescription').value;
-      found.task.assigneeId = document.getElementById('taskAssignee').value || null;
+      const sel = document.getElementById('taskAssignee');
+      const selectedIds = sel ? Array.from(sel.selectedOptions).map(o => o.value) : [];
+      setTaskAssignees(found.task, selectedIds);
       found.task.deadline = document.getElementById('taskDeadline').value;
       found.task.priority = document.getElementById('taskPriority').value;
-      if (found.task.assigneeId && found.task.assigneeId !== prevAssignee) {
-        const user = getUser(found.task.assigneeId);
+      const newIds = getTaskAssigneeIds(found.task).filter(id => !prevIds.includes(id));
+      for (const uid of newIds) {
+        const user = getUser(uid);
         console.log('[Уведомление] Задача "' + found.task.title + '" назначена на ' + user.name + ' (' + user.email + ')');
-        notifyTask({ type: 'assigned', userId: found.task.assigneeId, taskTitle: found.task.title });
+        notifyTask({ type: 'assigned', userId: uid, taskTitle: found.task.title });
       }
       saveState(); render(); persistTask(found.task, found.column.id);
     }
@@ -798,10 +859,11 @@ document.getElementById('btnSendMessage').addEventListener('click', async () => 
     input.value = '';
     saveState(); renderChat(found.task);
     await persistMessage(msg, found.task.id);
-    if (found.task.assigneeId && found.task.assigneeId !== state.currentUserId) {
-      const user = getUser(found.task.assigneeId);
+    for (const uid of getTaskAssigneeIds(found.task)) {
+      if (uid === state.currentUserId) continue;
+      const user = getUser(uid);
       console.log('[Уведомление] Новый ответ в задаче "' + found.task.title + '" → ' + user.email);
-      notifyTask({ type: 'comment', userId: found.task.assigneeId, taskTitle: found.task.title, message: text });
+      notifyTask({ type: 'comment', userId: uid, taskTitle: found.task.title, message: text });
     }
   }
 });
@@ -912,10 +974,32 @@ async function resolveAssigneeId(assigneeId) {
   return null;
 }
 
+async function persistTaskAssignees(task) {
+  if (!isCloudMode || !supabase || !task) return;
+  const ids = getTaskAssigneeIds(task);
+  const resolved = [];
+  for (const id of ids) {
+    const rid = await resolveAssigneeId(id);
+    if (rid) resolved.push(rid);
+  }
+  try {
+    await supabase.from('task_assignees').delete().eq('task_id', task.id);
+    if (resolved.length) {
+      const rows = resolved.map(user_id => ({ task_id: task.id, user_id }));
+      const { error } = await supabase.from('task_assignees').insert(rows);
+      if (error) console.warn('[YouGile] persist assignees', error);
+    }
+  } catch (e) {
+    console.warn('[YouGile] persistTaskAssignees', e);
+  }
+  return resolved[0] || null;
+}
+
 async function persistTask(task, columnId) {
   if (!isCloudMode || !supabase || !task) return;
   try {
-    const assignee_id = await resolveAssigneeId(task.assigneeId);
+    const assignee_id = await persistTaskAssignees(task);
+    task.assigneeId = assignee_id;
     const { error } = await supabase.from('tasks').upsert({
       id: task.id,
       column_id: columnId,
@@ -1026,6 +1110,13 @@ async function loadFromCloud() {
             t.messages = (messages || []).map(m => ({ id: m.id, authorId: m.author_id, text: m.text, time: new Date(m.created_at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) }));
             t.attachments = (attachments || []).map(a => ({ id: a.id, name: a.name, size: a.size, type: a.mime_type, storage_path: a.storage_path }));
             t.assigneeId = t.assignee_id || null;
+            try {
+              const { data: ta } = await supabase.from('task_assignees').select('user_id').eq('task_id', t.id);
+              t.assigneeIds = (ta || []).map(x => x.user_id);
+              if (!t.assigneeIds.length && t.assigneeId) t.assigneeIds = [t.assigneeId];
+            } catch (_) {
+              t.assigneeIds = t.assigneeId ? [t.assigneeId] : [];
+            }
             c.tasks.push(t);
           }
           b.columns.push(c);
@@ -1065,13 +1156,13 @@ async function loadCompanyUsers() {
         role: p.role || 'member'
       });
     }
-    // текущий пользователь всегда в списке
+    // текущий пользователь в списке только как member, если профиля ещё нет
     if (cloudUser && !map.has(cloudUser.id)) {
       map.set(cloudUser.id, {
         id: cloudUser.id,
         name: cloudUser.user_metadata?.full_name || splitEmail(cloudUser.email),
         email: cloudUser.email,
-        role: 'owner'
+        role: 'member'
       });
     }
     state.users = Array.from(map.values());
@@ -1083,38 +1174,60 @@ async function loadCompanyUsers() {
 async function onCloudReady() {
   if (!cloudUser) return;
   state.currentUserId = cloudUser.id;
-  const { data: profile } = await supabase.from('profiles').select('full_name, role, company_id').eq('id', cloudUser.id).maybeSingle();
+
+  // company_id из invite metadata, если есть
+  const metaCompanyId = cloudUser.user_metadata?.company_id || null;
+  if (metaCompanyId && !state.company.id) state.company.id = metaCompanyId;
+
+  let { data: profile } = await supabase.from('profiles').select('full_name, role, company_id').eq('id', cloudUser.id).maybeSingle();
+
   if (profile) {
     if (profile.company_id) state.company.id = profile.company_id;
-    const name = profile.full_name || cloudUser.email;
-    if (!state.users.find(u => u.id === cloudUser.id)) {
-      state.users.push({ id: cloudUser.id, name, email: cloudUser.email, role: profile.role || 'member' });
-    } else {
-      const u = state.users.find(u => u.id === cloudUser.id);
-      u.name = name;
-      u.email = cloudUser.email;
+    // если в профиле нет company, но есть в metadata invite — привязываем
+    if (!profile.company_id && metaCompanyId) {
+      await supabase.from('profiles').update({ company_id: metaCompanyId, role: profile.role || 'member' }).eq('id', cloudUser.id);
+      state.company.id = metaCompanyId;
+      profile.company_id = metaCompanyId;
     }
+    const name = profile.full_name || cloudUser.email;
+    const role = profile.role || 'member';
+    const existing = state.users.find(u => u.id === cloudUser.id);
+    if (!existing) state.users.push({ id: cloudUser.id, name, email: cloudUser.email, role });
+    else { existing.name = name; existing.email = cloudUser.email; existing.role = role; }
   } else {
+    // Новый профиль: owner только если у компании ещё нет пользователей, иначе member
+    let role = 'member';
+    const companyId = state.company.id || metaCompanyId;
+    if (companyId) {
+      const { count } = await supabase.from('profiles').select('id', { count: 'exact', head: true }).eq('company_id', companyId);
+      if (!count || count === 0) role = 'owner';
+    } else {
+      role = 'owner'; // первый пользователь без компании — создаст компанию
+    }
     const { data: created } = await supabase.from('profiles').insert({
       id: cloudUser.id,
       email: cloudUser.email,
       full_name: cloudUser.user_metadata?.full_name || splitEmail(cloudUser.email),
-      company_id: state.company.id,
-      role: 'owner'
+      company_id: companyId,
+      role
     }).select().maybeSingle();
     if (created && created.company_id) state.company.id = created.company_id;
     state.users.push({
       id: cloudUser.id,
       name: cloudUser.user_metadata?.full_name || splitEmail(cloudUser.email),
       email: cloudUser.email,
-      role: 'owner'
+      role
     });
   }
+
   await ensureCompany();
+  // ensureCompany не должен менять роль на owner
   await loadCompanyUsers();
   const loaded = await loadFromCloud();
   if (!loaded && state.projects && state.projects.length) {
-    await persistProject(state.projects[0]);
+    // сидим данные только для owner
+    const me = state.users.find(u => u.id === cloudUser.id);
+    if (me && me.role === 'owner') await persistProject(state.projects[0]);
   }
   hideAuth();
   render();
