@@ -126,6 +126,7 @@ let state = (typeof USE_SUPABASE !== 'undefined' && USE_SUPABASE)
   : loadState();
 let searchQuery = '';
 let currentTaskId = null;
+const expandedSubtasks = new Set(); // task ids with open subtask list
 let chatReplyToId = null;
 let chatEditId = null;
 let chatPendingFile = null;
@@ -461,24 +462,47 @@ function renderBoard() {
 }
 
 function renderCard(task) {
-  const done = (task.subtasks || []).filter(s => s.done).length;
-  const total = (task.subtasks || []).length;
+  const subs = task.subtasks || [];
+  const done = subs.filter(s => s.done).length;
+  const total = subs.length;
   const progress = total ? Math.round((done / total) * 100) : 0;
   const assignees = getTaskAssigneeIds(task).map(id => getUser(id)).filter(u => u && u.name);
   const filesCount = (task.attachments || []).length;
+  const msgCount = (task.messages || []).length;
   const priorityClass = task.priority === 'urgent' ? 'priority-urgent' : task.priority === 'high' ? 'priority-high' : '';
   const priorityLabel = task.priority === 'urgent' ? '🔥 Срочно' : task.priority === 'high' ? '⚡ Важно' : '';
+  const expanded = expandedSubtasks.has(task.id);
+  const subList = total ? `
+    <div class="card-subtasks ${expanded ? 'open' : ''}" data-subs-for="${task.id}">
+      ${subs.map(s => `
+        <div class="card-subtask ${s.done ? 'done' : ''}" data-sub-id="${s.id}">
+          <input type="checkbox" class="card-sub-check" data-task-id="${task.id}" data-sub-id="${s.id}" ${s.done ? 'checked' : ''} />
+          <span class="card-sub-title">${escapeHtml(s.title)}</span>
+        </div>
+      `).join('')}
+    </div>` : '';
+
   return `
-    <div class="card" draggable="true" data-task-id="${task.id}">
-      <div class="card-title">${escapeHtml(task.title)}</div>
-      <div class="card-meta">
-        ${assignees.length ? `<span class="avatar-stack">${assignees.slice(0,5).map(a => avatarHtml(a)).join('')}${assignees.length > 5 ? `<span class="sticker">+${assignees.length-5}</span>` : ''}</span>` : ''}
-        ${task.deadline ? `<span class="sticker deadline">📅 ${formatDate(task.deadline)}</span>` : ''}
-        ${priorityLabel ? `<span class="sticker ${priorityClass}">${priorityLabel}</span>` : ''}
-        ${total ? `<span class="sticker">${done}/${total}</span>` : ''}
-        ${filesCount ? `<span class="sticker">📎 ${filesCount}</span>` : ''}
+    <div class="card ${expanded ? 'has-open-subs' : ''}" draggable="true" data-task-id="${task.id}">
+      <div class="card-main">
+        <div class="card-title">${escapeHtml(task.title)}</div>
+        <div class="card-meta">
+          ${assignees.length ? `<span class="avatar-stack">${assignees.slice(0,4).map(a => avatarHtml(a)).join('')}${assignees.length > 4 ? `<span class="sticker">+${assignees.length-4}</span>` : ''}</span>` : ''}
+          ${task.deadline ? `<span class="sticker deadline">📅 ${formatDate(task.deadline)}</span>` : ''}
+          ${priorityLabel ? `<span class="sticker ${priorityClass}">${priorityLabel}</span>` : ''}
+          ${filesCount ? `<span class="sticker">📎 ${filesCount}</span>` : ''}
+          ${msgCount ? `<span class="sticker">💬 ${msgCount}</span>` : ''}
+        </div>
+        ${total ? `
+          <div class="card-sub-bar">
+            <button type="button" class="subtasks-toggle" data-toggle-subs="${task.id}" title="Подзадачи">
+              <span class="chevron ${expanded ? 'open' : ''}">▶</span>
+              <span>${done}/${total} подзадач</span>
+            </button>
+            <div class="progress-bar"><div class="progress-fill" style="width:${progress}%"></div></div>
+          </div>` : ''}
       </div>
-      ${total ? `<div class="progress-bar"><div class="progress-fill" style="width:${progress}%"></div></div>` : ''}
+      ${subList}
     </div>
   `;
 }
@@ -515,6 +539,10 @@ let draggedTaskId = null;
 function setupDragAndDrop() {
   document.querySelectorAll('.card').forEach(card => {
     card.addEventListener('dragstart', e => {
+      if (e.target.closest('.card-subtasks, .subtasks-toggle, .card-sub-check')) {
+        e.preventDefault();
+        return;
+      }
       draggedTaskId = card.dataset.taskId;
       card.classList.add('dragging');
       e.dataTransfer.effectAllowed = 'move';
@@ -524,7 +552,36 @@ function setupDragAndDrop() {
       draggedTaskId = null;
       document.querySelectorAll('.column-cards').forEach(z => z.classList.remove('drag-over'));
     });
-    card.addEventListener('click', () => openTask(card.dataset.taskId));
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.subtasks-toggle')) {
+        e.stopPropagation();
+        const id = e.target.closest('.subtasks-toggle').dataset.toggleSubs;
+        if (expandedSubtasks.has(id)) expandedSubtasks.delete(id);
+        else expandedSubtasks.add(id);
+        renderBoard();
+        return;
+      }
+      if (e.target.closest('.card-sub-check')) {
+        e.stopPropagation();
+        const cb = e.target.closest('.card-sub-check');
+        const taskId = cb.dataset.taskId;
+        const subId = cb.dataset.subId;
+        const found = findTask(taskId);
+        if (!found) return;
+        const sub = (found.task.subtasks || []).find(s => s.id === subId);
+        if (!sub) return;
+        sub.done = cb.checked;
+        saveState();
+        renderBoard();
+        persistSubtask(sub, taskId);
+        return;
+      }
+      if (e.target.closest('.card-subtasks')) {
+        e.stopPropagation();
+        return;
+      }
+      openTask(card.dataset.taskId);
+    });
   });
   document.querySelectorAll('.column-cards').forEach(zone => {
     zone.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; zone.classList.add('drag-over'); });
@@ -1058,7 +1115,7 @@ async function notifyTask({ type, userId, taskTitle, message }) {
     const { data, error } = await supabase.functions.invoke('notify-task', {
       body: {
         type,
-        to_email: user.email,
+        to_email: String(user.email || '').trim().toLowerCase(),
         to_name: user.name,
         task_title: taskTitle,
         from_name: from?.name || from?.email || 'Коллега',

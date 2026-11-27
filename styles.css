@@ -1316,3 +1316,93 @@ body {
   font-size: 12px;
   cursor: pointer;
 }
+
+/* Card subtasks expand (YouGile-like) */
+.card {
+  padding: 0;
+  overflow: hidden;
+}
+.card-main {
+  padding: 12px;
+}
+.card-title {
+  margin-bottom: 8px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.card-sub-bar {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.subtasks-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  width: fit-content;
+}
+.subtasks-toggle:hover { color: var(--primary); }
+.subtasks-toggle .chevron {
+  display: inline-block;
+  font-size: 9px;
+  transition: transform 0.15s ease;
+}
+.subtasks-toggle .chevron.open {
+  transform: rotate(90deg);
+}
+.card-subtasks {
+  display: none;
+  border-top: 1px solid var(--border);
+  background: rgba(0,0,0,0.15);
+  padding: 6px 8px 8px;
+}
+.card-subtasks.open {
+  display: block;
+}
+.card-subtask {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.card-subtask:hover {
+  background: var(--hover);
+}
+.card-subtask.done .card-sub-title {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+.card-sub-check {
+  accent-color: var(--primary);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.card-sub-title {
+  line-height: 1.3;
+  word-break: break-word;
+}
+.card.has-open-subs {
+  border-color: rgba(91, 141, 239, 0.35);
+}
+.progress-bar {
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--success), #6bcf7f);
+  border-radius: 2px;
+}
