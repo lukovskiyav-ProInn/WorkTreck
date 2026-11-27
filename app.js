@@ -125,7 +125,7 @@ let state = (typeof USE_SUPABASE !== 'undefined' && USE_SUPABASE)
   ? { company: { id: null, name: 'Моя компания' }, users: [], projects: [], currentProjectId: null, currentBoardId: null, currentUserId: null } 
   : loadState();
 let searchQuery = '';
-let boardFilter = { assigneeId: '', priority: '' };
+let boardFilter = { assigneeId: '', priority: '', department: '' };
 let currentTaskId = null;
 const expandedSubtasks = new Set(); // task ids with open subtask list
 let chatReplyToId = null;
@@ -251,19 +251,42 @@ function renderBoards() {
 
 function renderFilters() {
   const sel = document.getElementById('filterAssignee');
-  if (!sel) return;
-  const current = boardFilter.assigneeId || '';
-  sel.innerHTML = '<option value="">Все исполнители</option>' +
-    (state.users || []).map(u =>
-      `<option value="${u.id}" ${u.id === current ? 'selected' : ''}>${escapeHtml(u.name)}</option>`
-    ).join('');
+  if (sel) {
+    const current = boardFilter.assigneeId || '';
+    sel.innerHTML = '<option value="">Все исполнители</option>' +
+      (state.users || []).map(u =>
+        `<option value="${u.id}" ${u.id === current ? 'selected' : ''}>${escapeHtml(u.name)}</option>`
+      ).join('');
+  }
+  const dep = document.getElementById('filterDepartment');
+  if (dep) {
+    const departments = Array.from(new Set(
+      (state.users || []).map(u => (u.department || '').trim()).filter(Boolean)
+    )).sort();
+    const cur = boardFilter.department || '';
+    dep.innerHTML = '<option value="">Все отделы</option>' +
+      departments.map(d => `<option value="${escapeHtml(d)}" ${d === cur ? 'selected' : ''}>${escapeHtml(d)}</option>`).join('');
+  }
   const pri = document.getElementById('filterPriority');
   if (pri) pri.value = boardFilter.priority || '';
+}
+
+function dedupeProjects() {
+  const seen = new Set();
+  const out = [];
+  for (const p of state.projects || []) {
+    if (!p || !p.id || seen.has(p.id)) continue;
+    seen.add(p.id);
+    out.push(p);
+  }
+  // same name different ids — оставляем все, но сортируем; дубликаты id убираем
+  state.projects = out;
 }
 
 function renderProjects() {
   const list = document.getElementById('projectsList');
   if (!list) return;
+  dedupeProjects();
   list.innerHTML = (state.projects || []).map(p => `
     <div class="project-item ${p.id === state.currentProjectId ? 'active' : ''}" data-id="${p.id}">
       <span class="proj-name">📁 ${escapeHtml(p.name)}</span>
@@ -336,29 +359,83 @@ async function deleteProject(projectId) {
   }
 }
 
-function isOwner() {
+// Роли: administrator > gip > gap > manager > member
+// owner приравнивается к administrator
+const ROLE_RANK = {
+  owner: 100,
+  administrator: 90,
+  admin: 90, // совместимость
+  gip: 70,
+  gap: 60,
+  manager: 40,
+  member: 10
+};
+
+function roleLabel(role) {
+  const map = {
+    owner: 'Администратор',
+    administrator: 'Администратор',
+    admin: 'Администратор',
+    gip: 'ГИП',
+    gap: 'ГАП',
+    manager: 'Руководитель',
+    member: 'Исполнитель'
+  };
+  return map[role] || 'Исполнитель';
+}
+
+function roleOptionsHtml(selected) {
+  const roles = [
+    ['administrator', 'Администратор'],
+    ['gip', 'ГИП'],
+    ['gap', 'ГАП'],
+    ['manager', 'Руководитель'],
+    ['member', 'Исполнитель']
+  ];
+  const sel = selected === 'owner' || selected === 'admin' ? 'administrator' : selected;
+  return roles.map(([v, l]) =>
+    `<option value="${v}" ${sel === v ? 'selected' : ''}>${l}</option>`
+  ).join('');
+}
+
+function getMyRole() {
   const me = state.users.find(u => u.id === state.currentUserId);
-  return me && me.role === 'owner';
+  return me?.role || 'member';
+}
+
+function roleRank(role) {
+  return ROLE_RANK[role] ?? 10;
+}
+
+function isOwner() {
+  const r = getMyRole();
+  return r === 'owner' || r === 'administrator' || r === 'admin';
 }
 
 function isAdminOrOwner() {
-  const me = state.users.find(u => u.id === state.currentUserId);
-  return me && (me.role === 'owner' || me.role === 'admin');
+  return roleRank(getMyRole()) >= 90;
 }
 
-function roleLabel(role) {
-  if (role === 'owner') return 'Владелец';
-  if (role === 'admin') return 'Админ';
-  return 'Исполнитель';
+function canManageUsers() {
+  return roleRank(getMyRole()) >= 90;
 }
+
+/** Исполнитель видит только свои задачи; остальные роли — все (с учётом фильтров) */
+function canViewTask(task) {
+  const rank = roleRank(getMyRole());
+  if (rank >= 40) return true; // руководитель и выше
+  const ids = getTaskAssigneeIds(task);
+  return ids.includes(state.currentUserId);
+}
+
 
 function renderUsers() {
   const list = document.getElementById('usersList');
   if (!list) return;
   const owner = isOwner();
   list.innerHTML = (state.users || []).map(u => {
-    const canDelete = owner && u.role !== 'owner' && u.id !== state.currentUserId;
-    const canEditRole = owner && u.id !== state.currentUserId && u.role !== 'owner';
+    const canDelete = canManageUsers() && u.role !== 'owner' && u.id !== state.currentUserId;
+    const canEditRole = canManageUsers() && u.id !== state.currentUserId && u.role !== 'owner';
     return `
       <div class="user-item" data-id="${u.id}">
         <div class="u-avatar">${(u.name || '?')[0].toUpperCase()}</div>
@@ -368,8 +445,7 @@ function renderUsers() {
           ${(u.position || u.department) ? `<div class="u-meta">${escapeHtml([u.position, u.department].filter(Boolean).join(' · '))}</div>` : ''}
           ${canEditRole ? `
             <select class="role-select" data-id="${u.id}" title="Роль">
-              <option value="member" ${u.role === 'member' ? 'selected' : ''}>Исполнитель</option>
-              <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Админ</option>
+              ${roleOptionsHtml(u.role)}
             </select>
           ` : `<div class="u-role">${roleLabel(u.role)}</div>`}
         </div>
@@ -490,8 +566,19 @@ function renderBoard() {
         (t.description || '').toLowerCase().includes(q)
       );
     }
+    // видимость по роли
+    tasks = tasks.filter(t => canViewTask(t));
     if (boardFilter.assigneeId) {
       tasks = tasks.filter(t => getTaskAssigneeIds(t).includes(boardFilter.assigneeId));
+    }
+    if (boardFilter.department) {
+      tasks = tasks.filter(t => {
+        const ids = getTaskAssigneeIds(t);
+        return ids.some(id => {
+          const u = getUser(id);
+          return u && (u.department || '') === boardFilter.department;
+        });
+      });
     }
     if (boardFilter.priority) {
       tasks = tasks.filter(t => (t.priority || 'normal') === boardFilter.priority);
@@ -691,6 +778,10 @@ function moveTask(taskId, targetColId) {
 function openTask(taskId) {
   const found = findTask(taskId);
   if (!found) return;
+  if (!canViewTask(found.task)) {
+    alert('Нет доступа к этой задаче');
+    return;
+  }
   currentTaskId = taskId;
   const { task } = found;
   document.getElementById('taskTitle').value = task.title;
@@ -962,6 +1053,9 @@ function readFileAsDataURL(file) {
 document.getElementById('btnAddProject').addEventListener('click', async () => {
   const name = prompt('Название проекта:');
   if (!name || !name.trim()) return;
+  if ((state.projects || []).some(p => (p.name || '').toLowerCase() === name.trim().toLowerCase())) {
+    if (!confirm('Проект с таким названием уже есть. Создать ещё один?')) return;
+  }
   const id = uid();
   const project = { id, name: name.trim(), boards: [{ id: uid(), name: 'Основная доска', columns: [
     { id: uid(), title: 'Нужно сделать', tasks: [] },
@@ -1190,60 +1284,60 @@ function renderCompanyUsers() {
   const list = document.getElementById('companyUsersList');
   if (!list) return;
   const canEdit = isAdminOrOwner();
-  list.innerHTML = (state.users || []).map(u => `
-    <div class="company-user-card" data-id="${u.id}">
-      <div class="cu-head">
-        <div class="u-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700">${(u.name||'?')[0].toUpperCase()}</div>
-        <div>
-          <div class="cu-name">${escapeHtml(u.name)}</div>
-          <div class="cu-email">${escapeHtml(u.email)} · ${roleLabel(u.role)}</div>
+  list.innerHTML = (state.users || []).map(u => {
+    const canDelete = canEdit && u.role !== 'owner' && u.id !== state.currentUserId;
+    const canEditRole = canEdit && u.role !== 'owner' && u.id !== state.currentUserId;
+    return `
+    <tr data-id="${u.id}">
+      <td>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="av" style="width:28px;height:28px;font-size:11px;background:var(--primary)">${(u.name||'?')[0].toUpperCase()}</span>
+          <input type="text" class="form-input cu-name" value="${escapeHtml(u.name || '')}" ${canEdit ? '' : 'disabled'} style="min-width:110px" />
         </div>
-      </div>
-      <div class="cu-grid">
-        <div>
-          <label>Должность</label>
-          <input type="text" class="form-input cu-position" data-id="${u.id}" value="${escapeHtml(u.position || '')}" ${canEdit ? '' : 'disabled'} placeholder="Должность" />
+      </td>
+      <td><span style="color:var(--text-muted)">${escapeHtml(u.email || '')}</span></td>
+      <td><input type="text" class="form-input cu-position" value="${escapeHtml(u.position || '')}" ${canEdit ? '' : 'disabled'} placeholder="—" /></td>
+      <td><input type="text" class="form-input cu-department" value="${escapeHtml(u.department || '')}" ${canEdit ? '' : 'disabled'} placeholder="—" /></td>
+      <td>
+        ${canEditRole ? `
+          <select class="form-input cu-role">
+            ${roleOptionsHtml(u.role)}
+          </select>
+        ` : `<span>${roleLabel(u.role)}</span>`}
+      </td>
+      <td>
+        <div class="cu-actions">
+          ${canEdit ? `<button type="button" class="btn-icon-sm cu-save" title="Сохранить">💾</button>` : ''}
+          ${canDelete ? `<button type="button" class="btn-icon-sm cu-del" title="Удалить">🗑</button>` : ''}
         </div>
-        <div>
-          <label>Отдел</label>
-          <input type="text" class="form-input cu-department" data-id="${u.id}" value="${escapeHtml(u.department || '')}" ${canEdit ? '' : 'disabled'} placeholder="Отдел" />
-        </div>
-        <div>
-          <label>Роль</label>
-          ${canEdit && u.role !== 'owner' && u.id !== state.currentUserId ? `
-            <select class="form-input cu-role" data-id="${u.id}">
-              <option value="member" ${u.role==='member'?'selected':''}>Исполнитель</option>
-              <option value="admin" ${u.role==='admin'?'selected':''}>Админ</option>
-            </select>
-          ` : `<input class="form-input" value="${roleLabel(u.role)}" disabled />`}
-        </div>
-        <div>
-          <label>&nbsp;</label>
-          ${canEdit ? `<button type="button" class="btn primary cu-save" data-id="${u.id}">OK</button>` : ''}
-        </div>
-      </div>
-    </div>
-  `).join('') || '<div style="color:var(--text-muted);font-size:13px">Нет сотрудников</div>';
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="6" style="color:var(--text-muted);padding:16px">Нет сотрудников</td></tr>';
 
   list.querySelectorAll('.cu-save').forEach(btn => {
     btn.addEventListener('click', async () => {
-      const id = btn.dataset.id;
-      const card = list.querySelector(`.company-user-card[data-id="${id}"]`);
-      if (!card) return;
-      const position = card.querySelector('.cu-position')?.value.trim() || '';
-      const department = card.querySelector('.cu-department')?.value.trim() || '';
-      const roleSel = card.querySelector('.cu-role');
+      const row = btn.closest('tr');
+      const id = row?.dataset.id;
+      if (!id) return;
+      const name = row.querySelector('.cu-name')?.value.trim() || '';
+      const position = row.querySelector('.cu-position')?.value.trim() || '';
+      const department = row.querySelector('.cu-department')?.value.trim() || '';
+      const roleSel = row.querySelector('.cu-role');
       const role = roleSel ? roleSel.value : null;
       const u = state.users.find(x => x.id === id);
       if (!u) return;
+      if (name) u.name = name;
       u.position = position;
       u.department = department;
       if (role) u.role = role;
       saveState();
       render();
-      renderCompanyUsers();
       if (isCloudMode && supabase) {
-        const patch = { position: position || null, department: department || null };
+        const patch = {
+          full_name: u.name,
+          position: position || null,
+          department: department || null
+        };
         if (role) patch.role = role;
         const { error } = await supabase.from('profiles').update(patch).eq('id', id);
         if (error) {
@@ -1251,9 +1345,19 @@ function renderCompanyUsers() {
           alert('Не удалось сохранить: ' + error.message);
         } else {
           btn.textContent = '✓';
-          setTimeout(() => { btn.textContent = 'OK'; }, 1000);
+          setTimeout(() => { btn.textContent = '💾'; }, 800);
         }
       }
+      renderCompanyUsers();
+    });
+  });
+  list.querySelectorAll('.cu-del').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const row = btn.closest('tr');
+      const id = row?.dataset.id;
+      if (!id) return;
+      await deleteUser(id);
+      renderCompanyUsers();
     });
   });
 }
@@ -1264,6 +1368,11 @@ document.getElementById('closeCompanyModal')?.addEventListener('click', closeCom
 document.getElementById('companyModal')?.addEventListener('click', (e) => {
   if (e.target === document.getElementById('companyModal')) closeCompanyModal();
 });
+document.getElementById('btnCompanyAddUser')?.addEventListener('click', () => {
+  closeCompanyModal();
+  document.getElementById('btnAddUser')?.click();
+});
+
 document.getElementById('btnSaveCompanyName')?.addEventListener('click', async () => {
   const name = document.getElementById('companyNameInput')?.value.trim();
   if (!name) return;
@@ -1549,9 +1658,16 @@ async function loadFromCloud() {
       }
       state.projects.push(p);
     }
+    // убрать дубликаты по id (на случай повторной загрузки)
+    const byId = new Map();
+    for (const p of state.projects) {
+      if (p && p.id && !byId.has(p.id)) byId.set(p.id, p);
+    }
+    state.projects = Array.from(byId.values());
     if (state.projects.length) {
-      state.currentProjectId = state.projects[0].id;
-      if (state.projects[0].boards.length) state.currentBoardId = state.projects[0].boards[0].id;
+      const still = state.projects.find(p => p.id === state.currentProjectId) || state.projects[0];
+      state.currentProjectId = still.id;
+      state.currentBoardId = still.boards?.[0]?.id || state.currentBoardId;
     }
     return true;
   } catch (e) {
@@ -1949,6 +2065,80 @@ if (filterAssignee) {
     renderBoard();
   });
 }
+
+function collectBoardTasks() {
+  const board = getCurrentBoard();
+  const list = [];
+  for (const col of board.columns || []) {
+    for (const t of col.tasks || []) {
+      if (!canViewTask(t)) continue;
+      list.push({ task: t, column: col.title });
+    }
+  }
+  return list;
+}
+
+function openTimeline() {
+  const box = document.getElementById('timelineChart');
+  const modal = document.getElementById('timelineModal');
+  if (!box || !modal) return;
+  const items = collectBoardTasks();
+  if (!items.length) {
+    box.innerHTML = '<div style="color:var(--text-muted);padding:20px">Нет задач для отображения</div>';
+    modal.classList.add('open');
+    return;
+  }
+  // ось: от сегодня-7д до max deadline или +30д
+  const now = new Date();
+  now.setHours(0,0,0,0);
+  const start = new Date(now); start.setDate(start.getDate() - 7);
+  let end = new Date(now); end.setDate(end.getDate() + 30);
+  for (const { task } of items) {
+    if (task.deadline) {
+      const d = new Date(task.deadline);
+      if (d > end) end = d;
+    }
+  }
+  const range = Math.max(1, (end - start) / 86400000);
+  box.innerHTML = items.map(({ task, column }) => {
+    const hasDl = !!task.deadline;
+    const dl = hasDl ? new Date(task.deadline) : new Date(now.getTime() + 7*86400000);
+    const offset = Math.max(0, Math.min(100, ((dl - start) / 86400000) / range * 100));
+    const width = hasDl ? Math.max(4, 8) : 6;
+    const left = Math.max(0, offset - width / 2);
+    const cls = (task.priority === 'urgent' ? 'urgent' : task.priority === 'high' ? 'high' : '') +
+      (column === 'Готово' ? ' done' : '');
+    const assignees = getTaskAssigneeIds(task).map(id => getUser(id)?.name).filter(Boolean).join(', ');
+    return `<div class="tl-row">
+      <div class="tl-label" title="${escapeHtml(task.title)}">${escapeHtml(task.title)}</div>
+      <div>
+        <div class="tl-bar-track">
+          <div class="tl-bar ${cls}" style="left:${left}%;width:${width}%"></div>
+        </div>
+        <div class="tl-meta">${escapeHtml(column)}${task.deadline ? ' · до ' + formatDate(task.deadline) : ' · без срока'}${assignees ? ' · ' + escapeHtml(assignees) : ''}</div>
+      </div>
+    </div>`;
+  }).join('');
+  modal.classList.add('open');
+}
+
+document.getElementById('btnTimeline')?.addEventListener('click', openTimeline);
+document.getElementById('closeTimelineModal')?.addEventListener('click', () => {
+  document.getElementById('timelineModal')?.classList.remove('open');
+});
+document.getElementById('timelineModal')?.addEventListener('click', (e) => {
+  if (e.target === document.getElementById('timelineModal'))
+    document.getElementById('timelineModal')?.classList.remove('open');
+});
+
+const filterDepartment = document.getElementById('filterDepartment');
+if (filterDepartment) {
+  filterDepartment.addEventListener('change', () => {
+    boardFilter.department = filterDepartment.value || '';
+    renderBoard();
+  });
+}
+
 const filterPriority = document.getElementById('filterPriority');
 if (filterPriority) {
   filterPriority.addEventListener('change', () => {
@@ -1959,7 +2149,7 @@ if (filterPriority) {
 const btnClearFilters = document.getElementById('btnClearFilters');
 if (btnClearFilters) {
   btnClearFilters.addEventListener('click', () => {
-    boardFilter = { assigneeId: '', priority: '' };
+    boardFilter = { assigneeId: '', priority: '', department: '' };
     searchQuery = '';
     const si = document.getElementById('searchInput');
     if (si) si.value = '';

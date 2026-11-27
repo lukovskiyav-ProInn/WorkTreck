@@ -690,3 +690,96 @@ body {
 @media (max-width: 640px) {
   .company-user-card .cu-grid { grid-template-columns: 1fr; }
 }
+
+.company-modal { width: 720px; max-width: 96vw; }
+.company-table-wrap {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: auto;
+  max-height: 400px;
+  background: #fff;
+}
+.company-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.company-table th {
+  text-align: left;
+  padding: 10px 12px;
+  background: #f8fafc;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.company-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.company-table tr:last-child td { border-bottom: none; }
+.company-table tr:hover td { background: #fafbfc; }
+.company-table .form-input {
+  padding: 6px 8px;
+  font-size: 12px;
+  min-width: 100px;
+}
+.company-table .btn-icon-sm {
+  width: 28px;
+  height: 28px;
+}
+.company-table .cu-actions {
+  display: flex;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.timeline-chart { display: flex; flex-direction: column; gap: 8px; }
+.tl-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 12px;
+  align-items: center;
+  font-size: 12px;
+}
+.tl-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-weight: 500;
+}
+.tl-bar-track {
+  height: 22px;
+  background: #eef2f7;
+  border-radius: 6px;
+  position: relative;
+  overflow: hidden;
+}
+.tl-bar {
+  position: absolute;
+  top: 3px;
+  height: 16px;
+  border-radius: 4px;
+  background: var(--primary);
+  min-width: 4px;
+}
+.tl-bar.urgent { background: var(--danger); }
+.tl-bar.high { background: var(--warning); }
+.tl-bar.done { background: var(--success); opacity: 0.75; }
+.tl-meta { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+.btn:not(.primary) {
+  background: #fff;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+.btn:not(.primary):hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  background: var(--primary-soft);
+}

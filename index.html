@@ -95,6 +95,9 @@
             <select id="filterAssignee" class="filter-select" title="Исполнитель">
               <option value="">Все исполнители</option>
             </select>
+            <select id="filterDepartment" class="filter-select" title="Отдел">
+              <option value="">Все отделы</option>
+            </select>
             <select id="filterPriority" class="filter-select" title="Приоритет">
               <option value="">Все приоритеты</option>
               <option value="urgent">Срочный</option>
@@ -106,6 +109,7 @@
           <div class="search-box">
             <input type="text" id="searchInput" placeholder="Поиск задач..." />
           </div>
+          <button type="button" class="btn" id="btnTimeline" title="Диаграмма задач">📊 Диаграмма</button>
           <button class="btn primary" id="btnAddTask">+ Задача</button>
         </div>
       </header>
@@ -234,7 +238,20 @@
       </div>
     </div>
 
-    <!-- Company Settings Modal -->
+    
+    <!-- Timeline / Gantt-lite -->
+    <div class="modal-overlay" id="timelineModal">
+      <div class="modal company-modal" style="width:900px">
+        <div class="modal-header">
+          <h3 style="margin:0;font-size:16px">Диаграмма задач</h3>
+          <button class="btn-close" id="closeTimelineModal">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="timelineChart" class="timeline-chart"></div>
+        </div>
+      </div>
+    </div>
+<!-- Company Settings Modal -->
     <div class="modal-overlay" id="companyModal">
       <div class="modal company-modal">
         <div class="modal-header">
@@ -249,8 +266,25 @@
               <button type="button" class="btn primary" id="btnSaveCompanyName">Сохранить</button>
             </div>
           </div>
-          <h4 style="font-size:13px;color:var(--text-muted);margin:0 0 10px">Сотрудники</h4>
-          <div id="companyUsersList" class="company-users-list"></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <h4 style="font-size:13px;color:var(--text-muted);margin:0">Сотрудники</h4>
+            <button type="button" class="btn primary" id="btnCompanyAddUser" style="padding:6px 12px;font-size:12px">+ Добавить</button>
+          </div>
+          <div class="company-table-wrap">
+            <table class="company-table" id="companyUsersTable">
+              <thead>
+                <tr>
+                  <th>Имя</th>
+                  <th>Email</th>
+                  <th>Должность</th>
+                  <th>Отдел</th>
+                  <th>Роль</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="companyUsersList"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
