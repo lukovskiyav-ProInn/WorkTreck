@@ -86,6 +86,8 @@
             <button type="button" class="btn-icon-sm" id="btnBoardMenu" title="Настройки доски">⚙</button>
             <div class="board-menu" id="boardMenu" style="display:none">
               <button type="button" id="menuRenameBoard">Переименовать доску</button>
+              <button type="button" id="menuFromTemplate">Из шаблона…</button>
+              <button type="button" id="menuTimeReport">Отчёт по времени</button>
               <button type="button" id="menuDeleteBoard" class="danger">Удалить доску</button>
             </div>
           </div>
@@ -114,10 +116,32 @@
         </div>
       </header>
 
-      <div class="board-container">
+      <div class="view-tabs">
+        <button type="button" class="view-tab active" data-view="board">Доска</button>
+        <button type="button" class="view-tab" data-view="myday">Мой день</button>
+        <button type="button" class="view-tab" data-view="calendar">Календарь</button>
+        <button type="button" class="view-tab" data-view="gantt">Гант</button>
+      </div>
+      <div class="mass-bar" id="massBar" style="display:none">
+        <span id="massCount">0 выбрано</span>
+        <select id="massAssignee" class="filter-select"><option value="">Назначить…</option></select>
+        <select id="massColumn" class="filter-select"><option value="">В колонку…</option></select>
+        <select id="massPriority" class="filter-select">
+          <option value="">Приоритет…</option>
+          <option value="urgent">Срочный</option>
+          <option value="high">Высокий</option>
+          <option value="normal">Обычный</option>
+        </select>
+        <button type="button" class="btn primary" id="btnMassApply">Применить</button>
+        <button type="button" class="btn" id="btnMassClear">Снять выбор</button>
+      </div>
+      <div class="board-container" id="viewBoard">
         <div class="board" id="board"></div>
         <button class="add-column-btn" id="btnAddColumn">+ Колонка</button>
       </div>
+      <div class="alt-view" id="viewMyday" style="display:none"></div>
+      <div class="alt-view" id="viewCalendar" style="display:none"></div>
+      <div class="alt-view" id="viewGantt" style="display:none"></div>
     </main>
 
     <!-- Task Modal -->
@@ -165,7 +189,19 @@
           </div>
 
           <div class="task-section">
-            <h4>Подзадачи <span id="subtasksProgress"></span></h4>
+            <h4>Стикеры / теги</h4>
+            <div id="taskStickers" class="stickers-edit"></div>
+            <div class="add-subtask" style="margin-top:8px">
+              <input type="text" id="newSticker" placeholder="Новый тег..." />
+              <button type="button" id="btnAddSticker">+</button>
+            </div>
+            <div style="margin-top:10px">
+              <label style="font-size:11px;color:var(--text-muted)">Цвет карточки</label>
+              <div id="taskColors" class="color-picker"></div>
+            </div>
+          </div>
+          <div class="task-section">
+            <h4>Подзадачи / чек-лист <span id="subtasksProgress"></span></h4>
             <div id="subtasksList" class="subtasks-list"></div>
             <div class="add-subtask">
               <input type="text" id="newSubtask" placeholder="Новая подзадача..." />
@@ -173,6 +209,39 @@
             </div>
           </div>
 
+          <div class="task-section">
+            <h4>Учёт времени</h4>
+            <div class="time-track-row">
+              <button type="button" class="btn primary" id="btnTimerToggle">▶ Старт</button>
+              <span id="timerDisplay" class="timer-display">00:00:00</span>
+              <span id="timeTotal" class="time-total"></span>
+            </div>
+            <div id="timeLog" class="time-log"></div>
+          </div>
+          <div class="task-section">
+            <h4>Повтор / шаблон</h4>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <select id="taskRecurrence" class="form-input" style="max-width:160px">
+                <option value="">Не повторять</option>
+                <option value="daily">Каждый день</option>
+                <option value="weekly">Каждую неделю</option>
+                <option value="monthly">Каждый месяц</option>
+              </select>
+              <button type="button" class="btn" id="btnSaveTemplate">💾 В шаблоны</button>
+            </div>
+          </div>
+          <div class="task-section">
+            <h4>Зеркало на другую доску</h4>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <select id="mirrorBoardSelect" class="form-input" style="flex:1"></select>
+              <button type="button" class="btn" id="btnMirrorTask">Связать</button>
+            </div>
+            <div id="mirrorInfo" style="font-size:12px;color:var(--text-muted);margin-top:6px"></div>
+          </div>
+          <div class="task-section">
+            <h4>История</h4>
+            <div id="taskActivity" class="activity-list"></div>
+          </div>
           <div class="task-section">
             <button type="button" class="btn primary" id="btnOpenTaskChat" style="width:100%">💬 Открыть чат задачи</button>
           </div>
@@ -239,6 +308,25 @@
     </div>
 
     
+    
+    <div class="modal-overlay" id="timeReportModal">
+      <div class="modal company-modal">
+        <div class="modal-header">
+          <h3 style="margin:0;font-size:16px">Отчёт по времени</h3>
+          <button class="btn-close" id="closeTimeReport">×</button>
+        </div>
+        <div class="modal-body" id="timeReportBody"></div>
+      </div>
+    </div>
+    <div class="modal-overlay" id="templatesModal">
+      <div class="modal company-modal">
+        <div class="modal-header">
+          <h3 style="margin:0;font-size:16px">Шаблоны задач</h3>
+          <button class="btn-close" id="closeTemplatesModal">×</button>
+        </div>
+        <div class="modal-body" id="templatesBody"></div>
+      </div>
+    </div>
     <!-- Timeline / Gantt-lite -->
     <div class="modal-overlay" id="timelineModal">
       <div class="modal company-modal" style="width:900px">
