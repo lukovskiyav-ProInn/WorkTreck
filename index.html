@@ -58,8 +58,8 @@
 
       <div class="sidebar-section chats-section">
         <div class="section-title">Чаты</div>
-        <div class="chat-item active">💬 Общий чат</div>
-        <div class="chat-item">👤 Личные</div>
+        <div class="chat-item" id="btnGeneralChat" role="button">💬 Общий чат</div>
+        <div class="chat-item" id="btnPersonalChats" role="button" title="Скоро">👤 Личные</div>
       </div>
 
       <div class="sidebar-footer">
@@ -250,14 +250,22 @@
     </div>
 
     <!-- Task Chat Panel (YouGile-style side panel) -->
+    <!-- Minimized chat bubble -->
+    <button type="button" class="chat-minimized" id="chatMinimized" style="display:none" title="Развернуть чат">
+      💬 <span id="chatMinLabel">Чат</span>
+    </button>
+
     <div class="chat-panel-overlay" id="chatPanelOverlay">
       <div class="chat-panel" id="chatPanel">
         <div class="chat-panel-header">
-          <div>
-            <div class="chat-panel-title">Чат задачи</div>
+          <div style="min-width:0;flex:1">
+            <div class="chat-panel-title" id="chatPanelTitle">Чат задачи</div>
             <div class="chat-panel-subtitle" id="chatPanelTaskTitle">—</div>
           </div>
-          <button type="button" class="btn-close" id="btnCloseChatPanel">×</button>
+          <div style="display:flex;gap:4px;flex-shrink:0">
+            <button type="button" class="btn-icon-sm" id="btnMinimizeChat" title="Свернуть">—</button>
+            <button type="button" class="btn-close" id="btnCloseChatPanel" title="Закрыть">×</button>
+          </div>
         </div>
         <div class="chat-panel-body" id="taskChat"></div>
         <div class="chat-reply-bar" id="chatReplyBar" style="display:none">
