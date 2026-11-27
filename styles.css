@@ -966,3 +966,59 @@ body {
   color: var(--primary);
   font-weight: 600;
 }
+/* Кнопка настроек карточки (три точки) */
+.card-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.card-settings-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  font-weight: bold;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  opacity: 0.3;
+  transition: opacity 0.15s, color 0.15s;
+}
+.card:hover .card-settings-btn {
+  opacity: 1;
+}
+.card-settings-btn:hover {
+  color: var(--primary);
+}
+
+/* Кнопка настроек подзадачи */
+.card-subtask {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 4px;
+  transition: background 0.1s;
+}
+.card-subtask:hover {
+  background: var(--hover);
+}
+.sub-settings-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  opacity: 0.3;
+  transition: opacity 0.15s;
+  margin-left: auto;
+}
+.card-subtask:hover .sub-settings-btn {
+  opacity: 1;
+}
+.sub-settings-btn:hover {
+  color: var(--primary);
+}
