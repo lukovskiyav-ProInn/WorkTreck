@@ -365,6 +365,7 @@ function renderUsers() {
         <div class="u-info">
           <div class="u-name">${escapeHtml(u.name)}</div>
           <div class="u-email">${escapeHtml(u.email)}</div>
+          ${(u.position || u.department) ? `<div class="u-meta">${escapeHtml([u.position, u.department].filter(Boolean).join(' · '))}</div>` : ''}
           ${canEditRole ? `
             <select class="role-select" data-id="${u.id}" title="Роль">
               <option value="member" ${u.role === 'member' ? 'selected' : ''}>Исполнитель</option>
@@ -998,6 +999,8 @@ document.getElementById('btnAddTask').addEventListener('click', async () => {
 document.getElementById('btnAddUser').addEventListener('click', () => {
   document.getElementById('inviteName').value = '';
   document.getElementById('inviteEmail').value = '';
+  const ip = document.getElementById('invitePosition'); if (ip) ip.value = '';
+  const idp = document.getElementById('inviteDepartment'); if (idp) idp.value = '';
   document.getElementById('inviteModal').classList.add('open');
   document.getElementById('inviteName').focus();
 });
@@ -1013,6 +1016,8 @@ document.getElementById('inviteModal').addEventListener('click', e => {
 document.getElementById('btnConfirmInvite').addEventListener('click', async () => {
   const name = document.getElementById('inviteName').value.trim();
   const email = document.getElementById('inviteEmail').value.trim();
+  const position = (document.getElementById('invitePosition')?.value || '').trim();
+  const department = (document.getElementById('inviteDepartment')?.value || '').trim();
 
   if (!name || !email) { alert('Укажите имя и email'); return; }
   if (state.users.some(u => u.email.toLowerCase() === email.toLowerCase())) {
@@ -1050,7 +1055,9 @@ document.getElementById('btnConfirmInvite').addEventListener('click', async () =
           email,
           full_name: name,
           company_id: state.company.id,
-          role: 'member'
+          role: 'member',
+          position: position || null,
+          department: department || null
         }, { onConflict: 'id' });
       } catch (pe) {
         console.warn('[YouGile] profile upsert after invite', pe);
@@ -1067,7 +1074,7 @@ document.getElementById('btnConfirmInvite').addEventListener('click', async () =
     console.log('[YouGile] Локальный режим: приглашение только в браузере');
   }
 
-  state.users.push({ id: userId, name, email, role: 'member' });
+  state.users.push({ id: userId, name, email, role: 'member', position, department });
   saveState();
   render();
   document.getElementById('inviteModal').classList.remove('open');
@@ -1083,6 +1090,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (document.getElementById('taskModal').classList.contains('open')) closeModal();
     if (document.getElementById('inviteModal').classList.contains('open')) document.getElementById('inviteModal').classList.remove('open');
+    if (document.getElementById('companyModal')?.classList.contains('open')) closeCompanyModal();
     if (document.getElementById('chatPanelOverlay')?.classList.contains('open')) closeTaskChatPanel();
   }
 });
@@ -1166,11 +1174,108 @@ document.getElementById('searchInput').addEventListener('input', e => {
   renderBoard();
 });
 
-document.getElementById('companySelect').addEventListener('click', async () => {
-  const name = prompt('Название компании:', state.company.name);
-  if (name && name.trim()) { state.company.name = name.trim(); saveState(); render();
-    if (isCloudMode && supabase) { await supabase.from('companies').update({ name: state.company.name }).eq('id', state.company.id); } }
+function openCompanyModal() {
+  const modal = document.getElementById('companyModal');
+  const input = document.getElementById('companyNameInput');
+  if (input) input.value = state.company.name || '';
+  renderCompanyUsers();
+  if (modal) modal.classList.add('open');
+}
+
+function closeCompanyModal() {
+  document.getElementById('companyModal')?.classList.remove('open');
+}
+
+function renderCompanyUsers() {
+  const list = document.getElementById('companyUsersList');
+  if (!list) return;
+  const canEdit = isAdminOrOwner();
+  list.innerHTML = (state.users || []).map(u => `
+    <div class="company-user-card" data-id="${u.id}">
+      <div class="cu-head">
+        <div class="u-avatar" style="width:32px;height:32px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700">${(u.name||'?')[0].toUpperCase()}</div>
+        <div>
+          <div class="cu-name">${escapeHtml(u.name)}</div>
+          <div class="cu-email">${escapeHtml(u.email)} · ${roleLabel(u.role)}</div>
+        </div>
+      </div>
+      <div class="cu-grid">
+        <div>
+          <label>Должность</label>
+          <input type="text" class="form-input cu-position" data-id="${u.id}" value="${escapeHtml(u.position || '')}" ${canEdit ? '' : 'disabled'} placeholder="Должность" />
+        </div>
+        <div>
+          <label>Отдел</label>
+          <input type="text" class="form-input cu-department" data-id="${u.id}" value="${escapeHtml(u.department || '')}" ${canEdit ? '' : 'disabled'} placeholder="Отдел" />
+        </div>
+        <div>
+          <label>Роль</label>
+          ${canEdit && u.role !== 'owner' && u.id !== state.currentUserId ? `
+            <select class="form-input cu-role" data-id="${u.id}">
+              <option value="member" ${u.role==='member'?'selected':''}>Исполнитель</option>
+              <option value="admin" ${u.role==='admin'?'selected':''}>Админ</option>
+            </select>
+          ` : `<input class="form-input" value="${roleLabel(u.role)}" disabled />`}
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          ${canEdit ? `<button type="button" class="btn primary cu-save" data-id="${u.id}">OK</button>` : ''}
+        </div>
+      </div>
+    </div>
+  `).join('') || '<div style="color:var(--text-muted);font-size:13px">Нет сотрудников</div>';
+
+  list.querySelectorAll('.cu-save').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const card = list.querySelector(`.company-user-card[data-id="${id}"]`);
+      if (!card) return;
+      const position = card.querySelector('.cu-position')?.value.trim() || '';
+      const department = card.querySelector('.cu-department')?.value.trim() || '';
+      const roleSel = card.querySelector('.cu-role');
+      const role = roleSel ? roleSel.value : null;
+      const u = state.users.find(x => x.id === id);
+      if (!u) return;
+      u.position = position;
+      u.department = department;
+      if (role) u.role = role;
+      saveState();
+      render();
+      renderCompanyUsers();
+      if (isCloudMode && supabase) {
+        const patch = { position: position || null, department: department || null };
+        if (role) patch.role = role;
+        const { error } = await supabase.from('profiles').update(patch).eq('id', id);
+        if (error) {
+          console.warn('[YouGile] update profile org', error);
+          alert('Не удалось сохранить: ' + error.message);
+        } else {
+          btn.textContent = '✓';
+          setTimeout(() => { btn.textContent = 'OK'; }, 1000);
+        }
+      }
+    });
+  });
+}
+
+document.getElementById('companySelect')?.addEventListener('click', openCompanyModal);
+document.getElementById('btnCompanySettings')?.addEventListener('click', openCompanyModal);
+document.getElementById('closeCompanyModal')?.addEventListener('click', closeCompanyModal);
+document.getElementById('companyModal')?.addEventListener('click', (e) => {
+  if (e.target === document.getElementById('companyModal')) closeCompanyModal();
 });
+document.getElementById('btnSaveCompanyName')?.addEventListener('click', async () => {
+  const name = document.getElementById('companyNameInput')?.value.trim();
+  if (!name) return;
+  state.company.name = name;
+  saveState();
+  render();
+  if (isCloudMode && supabase && state.company.id) {
+    const { error } = await supabase.from('companies').update({ name }).eq('id', state.company.id);
+    if (error) console.warn('[YouGile] company rename', error);
+  }
+});
+
 
 document.getElementById('btnReset').addEventListener('click', () => {
   if (!confirm('Сбросить все данные и вернуться к демо-проекту?')) return;
@@ -1460,7 +1565,7 @@ async function loadCompanyUsers() {
   try {
     const { data: profiles, error } = await supabase
       .from('profiles')
-      .select('id, email, full_name, role')
+      .select('id, email, full_name, role, position, department')
       .eq('company_id', state.company.id);
     if (error) {
       console.warn('[YouGile] loadCompanyUsers', error);
@@ -1472,7 +1577,9 @@ async function loadCompanyUsers() {
         id: p.id,
         name: p.full_name || p.email || 'Пользователь',
         email: p.email || '',
-        role: p.role || 'member'
+        role: p.role || 'member',
+        position: p.position || '',
+        department: p.department || ''
       });
     }
     // текущий пользователь в списке только как member, если профиля ещё нет

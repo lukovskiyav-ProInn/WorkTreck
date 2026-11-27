@@ -37,11 +37,12 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <div class="logo">YG</div>
-        <div class="company-select" id="companySelect" title="Нажмите, чтобы переименовать">
+        <div class="company-select" id="companySelect" title="Настройки компании">
           <span id="currentCompanyName">Моя компания</span>
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 9l6 6 6-6"/></svg>
         </div>
       </div>
+      <button type="button" class="btn-company-settings" id="btnCompanySettings">⚙ Моя компания</button>
 
       <div class="sidebar-section">
         <div class="section-title">Проекты</div>
@@ -204,7 +205,7 @@
       </div>
     </div>
 
-    <!-- Invite User Modal -->
+        <!-- Invite User Modal -->
     <div class="modal-overlay" id="inviteModal">
       <div class="modal modal-sm">
         <div class="modal-header">
@@ -214,19 +215,46 @@
         <div class="modal-body">
           <div class="meta-item" style="margin-bottom:12px">
             <label>Имя</label>
-            <input type="text" id="inviteName" placeholder="Иван Иванов" style="width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px" />
+            <input type="text" id="inviteName" class="form-input" placeholder="Иван Иванов" />
+          </div>
+          <div class="meta-item" style="margin-bottom:12px">
+            <label>Email</label>
+            <input type="email" id="inviteEmail" class="form-input" placeholder="ivan@company.ru" />
+          </div>
+          <div class="meta-item" style="margin-bottom:12px">
+            <label>Должность</label>
+            <input type="text" id="invitePosition" class="form-input" placeholder="Менеджер проектов" />
           </div>
           <div class="meta-item" style="margin-bottom:16px">
-            <label>Email</label>
-            <input type="email" id="inviteEmail" placeholder="ivan@company.ru" style="width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px" />
+            <label>Отдел</label>
+            <input type="text" id="inviteDepartment" class="form-input" placeholder="Разработка" />
           </div>
           <button class="btn primary" id="btnConfirmInvite" style="width:100%">Пригласить</button>
-          <p style="font-size:12px;color:var(--text-muted);margin-top:12px;line-height:1.4">
-            Сейчас сотрудник добавляется локально. Когда подключим облако и почту — ему будет уходить настоящее приглашение и уведомления о задачах.
-          </p>
         </div>
       </div>
     </div>
+
+    <!-- Company Settings Modal -->
+    <div class="modal-overlay" id="companyModal">
+      <div class="modal company-modal">
+        <div class="modal-header">
+          <h3 style="margin:0;font-size:16px">Моя компания</h3>
+          <button class="btn-close" id="closeCompanyModal">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="meta-item" style="margin-bottom:16px">
+            <label>Название компании</label>
+            <div style="display:flex;gap:8px">
+              <input type="text" id="companyNameInput" class="form-input" style="flex:1" />
+              <button type="button" class="btn primary" id="btnSaveCompanyName">Сохранить</button>
+            </div>
+          </div>
+          <h4 style="font-size:13px;color:var(--text-muted);margin:0 0 10px">Сотрудники</h4>
+          <div id="companyUsersList" class="company-users-list"></div>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <!-- Supabase -->
