@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YouGile Clone — Управление проектами</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <!-- Auth overlay (Supabase mode) -->
+  <div class="auth-overlay visible" id="authOverlay">
+    <div class="auth-card">
+      <h2 id="authTitle">Вход</h2>
+      <p class="auth-sub" id="authSub">Войдите, чтобы синхронизировать данные команды</p>
+      <div class="auth-error" id="authError"></div>
+      <div id="authNameField" style="display:none">
+        <label>Имя</label>
+        <input type="text" id="authName" placeholder="Иван Иванов" />
+      </div>
+      <label>Email</label>
+      <input type="email" id="authEmail" placeholder="you@company.ru" />
+      <label>Пароль</label>
+      <input type="password" id="authPassword" placeholder="••••••••" />
+      <button type="button" class="btn primary" id="authSubmit" onclick="window.__authSubmit && window.__authSubmit()">Войти</button>
+      <div class="auth-switch">
+        <span id="authSwitchText">Нет аккаунта?</span>
+        <button type="button" class="auth-link-btn" id="authSwitchBtn" onclick="window.__authSwitch && window.__authSwitch()">Зарегистрироваться</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="app" style="display:none">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">YG</div>
+        <div class="company-select" id="companySelect" title="Нажмите, чтобы переименовать">
+          <span id="currentCompanyName">Моя компания</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M6 9l6 6 6-6"/></svg>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-title">Проекты</div>
+        <div id="projectsList" class="projects-list"></div>
+        <button class="btn-add" id="btnAddProject">+ Новый проект</button>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="section-title">Сотрудники</div>
+        <div id="usersList" class="users-list"></div>
+        <button class="btn-add" id="btnAddUser">+ Пригласить по почте</button>
+      </div>
+
+      <div class="sidebar-section chats-section">
+        <div class="section-title">Чаты</div>
+        <div class="chat-item active">💬 Общий чат</div>
+        <div class="chat-item">👤 Личные</div>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="user-info">
+          <div class="avatar" id="currentUserAvatar">А</div>
+          <div>
+            <div class="user-name" id="currentUserName">Администратор</div>
+            <div class="user-role">Владелец</div>
+          </div>
+        </div>
+        <button class="btn-reset" id="btnReset" title="Сбросить все данные">↺</button>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <header class="topbar">
+        <div class="breadcrumbs">
+          <span id="currentProjectName">Проект</span>
+          <span class="sep">/</span>
+          <select id="boardSelect" class="board-select" title="Доска"></select>
+          <button type="button" class="btn-icon-sm" id="btnAddBoard" title="Новая доска">+</button>
+          <button type="button" class="btn-icon-sm" id="btnRenameBoard" title="Переименовать доску">✎</button>
+        </div>
+        <div class="topbar-actions">
+          <div class="search-box">
+            <input type="text" id="searchInput" placeholder="Поиск задач..." />
+          </div>
+          <button class="btn primary" id="btnAddTask">+ Задача</button>
+        </div>
+      </header>
+
+      <div class="board-container">
+        <div class="board" id="board"></div>
+        <button class="add-column-btn" id="btnAddColumn">+ Колонка</button>
+      </div>
+    </main>
+
+    <!-- Task Modal -->
+    <div class="modal-overlay" id="taskModal">
+      <div class="modal">
+        <div class="modal-header">
+          <input type="text" id="taskTitle" class="task-title-input" placeholder="Название задачи" />
+          <div class="modal-actions">
+            <button class="btn-danger" id="btnDeleteTask" title="Удалить задачу">🗑</button>
+            <button class="btn-close" id="closeModal">×</button>
+          </div>
+        </div>
+        <div class="modal-body">
+          <div class="task-meta">
+            <div class="meta-item">
+              <label>Исполнитель</label>
+              <select id="taskAssignee"></select>
+            </div>
+            <div class="meta-item">
+              <label>Дедлайн</label>
+              <input type="date" id="taskDeadline" />
+            </div>
+            <div class="meta-item">
+              <label>Приоритет</label>
+              <select id="taskPriority">
+                <option value="normal">Обычный</option>
+                <option value="high">Высокий</option>
+                <option value="urgent">Срочный</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="task-section">
+            <h4>Описание</h4>
+            <textarea id="taskDescription" placeholder="Добавьте описание..."></textarea>
+          </div>
+
+          <div class="task-section">
+            <h4>Файлы</h4>
+            <div id="attachmentsList" class="attachments-list"></div>
+            <label class="file-upload-btn">
+              <input type="file" id="fileInput" multiple hidden />
+              + Прикрепить файл
+            </label>
+          </div>
+
+          <div class="task-section">
+            <h4>Подзадачи <span id="subtasksProgress"></span></h4>
+            <div id="subtasksList" class="subtasks-list"></div>
+            <div class="add-subtask">
+              <input type="text" id="newSubtask" placeholder="Новая подзадача..." />
+              <button id="btnAddSubtask">+</button>
+            </div>
+          </div>
+
+          <div class="task-section chat-section">
+            <h4>Чат задачи</h4>
+            <div id="taskChat" class="task-chat"></div>
+            <div class="chat-input">
+              <input type="text" id="chatMessage" placeholder="Написать сообщение..." />
+              <button id="btnSendMessage">Отправить</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Invite User Modal -->
+    <div class="modal-overlay" id="inviteModal">
+      <div class="modal modal-sm">
+        <div class="modal-header">
+          <h3 style="margin:0;font-size:16px">Пригласить сотрудника</h3>
+          <button class="btn-close" id="closeInviteModal">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="meta-item" style="margin-bottom:12px">
+            <label>Имя</label>
+            <input type="text" id="inviteName" placeholder="Иван Иванов" style="width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px" />
+          </div>
+          <div class="meta-item" style="margin-bottom:16px">
+            <label>Email</label>
+            <input type="email" id="inviteEmail" placeholder="ivan@company.ru" style="width:100%;background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 10px;border-radius:6px;font-size:13px" />
+          </div>
+          <button class="btn primary" id="btnConfirmInvite" style="width:100%">Пригласить</button>
+          <p style="font-size:12px;color:var(--text-muted);margin-top:12px;line-height:1.4">
+            Сейчас сотрудник добавляется локально. Когда подключим облако и почту — ему будет уходить настоящее приглашение и уведомления о задачах.
+          </p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Supabase -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
