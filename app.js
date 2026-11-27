@@ -125,6 +125,7 @@ let state = (typeof USE_SUPABASE !== 'undefined' && USE_SUPABASE)
   ? { company: { id: null, name: 'Моя компания' }, users: [], projects: [], currentProjectId: null, currentBoardId: null, currentUserId: null } 
   : loadState();
 let searchQuery = '';
+let boardFilter = { assigneeId: '', priority: '' };
 let currentTaskId = null;
 const expandedSubtasks = new Set(); // task ids with open subtask list
 let chatReplyToId = null;
@@ -209,6 +210,7 @@ function render() {
     renderProjects();
     renderUsers();
     renderBoards();
+    renderFilters();
     renderBoard();
     renderAssigneeSelect();
 
@@ -246,16 +248,34 @@ function renderBoards() {
   ).join('');
 }
 
+
+function renderFilters() {
+  const sel = document.getElementById('filterAssignee');
+  if (!sel) return;
+  const current = boardFilter.assigneeId || '';
+  sel.innerHTML = '<option value="">Все исполнители</option>' +
+    (state.users || []).map(u =>
+      `<option value="${u.id}" ${u.id === current ? 'selected' : ''}>${escapeHtml(u.name)}</option>`
+    ).join('');
+  const pri = document.getElementById('filterPriority');
+  if (pri) pri.value = boardFilter.priority || '';
+}
+
 function renderProjects() {
   const list = document.getElementById('projectsList');
   if (!list) return;
   list.innerHTML = (state.projects || []).map(p => `
     <div class="project-item ${p.id === state.currentProjectId ? 'active' : ''}" data-id="${p.id}">
-      📁 ${escapeHtml(p.name)}
+      <span class="proj-name">📁 ${escapeHtml(p.name)}</span>
+      <span class="proj-actions">
+        <button type="button" class="proj-rename" data-id="${p.id}" title="Переименовать">✎</button>
+        <button type="button" class="proj-delete danger" data-id="${p.id}" title="Удалить">×</button>
+      </span>
     </div>
   `).join('');
   list.querySelectorAll('.project-item').forEach(el => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('.proj-actions')) return;
       state.currentProjectId = el.dataset.id;
       const project = getCurrentProject();
       state.currentBoardId = project.boards[0]?.id;
@@ -263,6 +283,57 @@ function renderProjects() {
       render();
     });
   });
+  list.querySelectorAll('.proj-rename').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await renameProject(btn.dataset.id);
+    });
+  });
+  list.querySelectorAll('.proj-delete').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      await deleteProject(btn.dataset.id);
+    });
+  });
+}
+
+async function renameProject(projectId) {
+  const project = state.projects.find(p => p.id === projectId);
+  if (!project) return;
+  const name = prompt('Название проекта:', project.name);
+  if (!name || !name.trim() || name.trim() === project.name) return;
+  project.name = name.trim();
+  saveState();
+  render();
+  if (isCloudMode && supabase) {
+    try {
+      const { error } = await supabase.from('projects').update({ name: project.name }).eq('id', project.id);
+      if (error) console.warn('[YouGile] rename project', error);
+    } catch (e) { console.warn(e); }
+  }
+}
+
+async function deleteProject(projectId) {
+  if ((state.projects || []).length <= 1) {
+    alert('Нельзя удалить единственный проект');
+    return;
+  }
+  const project = state.projects.find(p => p.id === projectId);
+  if (!project) return;
+  if (!confirm('Удалить проект «' + project.name + '» и все его доски/задачи?')) return;
+  state.projects = state.projects.filter(p => p.id !== projectId);
+  if (state.currentProjectId === projectId) {
+    state.currentProjectId = state.projects[0].id;
+    state.currentBoardId = state.projects[0].boards[0]?.id;
+  }
+  saveState();
+  render();
+  if (isCloudMode && supabase) {
+    try {
+      const { error } = await supabase.from('projects').delete().eq('id', projectId);
+      if (error) console.warn('[YouGile] delete project', error);
+    } catch (e) { console.warn(e); }
+  }
 }
 
 function isOwner() {
@@ -411,9 +482,19 @@ function renderBoard() {
   }
   const q = searchQuery.toLowerCase().trim();
   container.innerHTML = board.columns.map(col => {
-    const tasks = q
-      ? col.tasks.filter(t => t.title.toLowerCase().includes(q) || (t.description || '').toLowerCase().includes(q))
-      : col.tasks;
+    let tasks = col.tasks || [];
+    if (q) {
+      tasks = tasks.filter(t =>
+        (t.title || '').toLowerCase().includes(q) ||
+        (t.description || '').toLowerCase().includes(q)
+      );
+    }
+    if (boardFilter.assigneeId) {
+      tasks = tasks.filter(t => getTaskAssigneeIds(t).includes(boardFilter.assigneeId));
+    }
+    if (boardFilter.priority) {
+      tasks = tasks.filter(t => (t.priority || 'normal') === boardFilter.priority);
+    }
     return `
       <div class="column" data-col-id="${col.id}">
         <div class="column-header">
@@ -1698,19 +1779,88 @@ if (btnAddBoard) {
   });
 }
 
+async function renameCurrentBoard() {
+  const board = getCurrentBoard();
+  if (!board?.id) return;
+  const name = prompt('Название доски:', board.name);
+  if (!name || !name.trim()) return;
+  board.name = name.trim();
+  saveState();
+  render();
+  await persistBoard(board, getCurrentProject().id);
+}
+
+async function deleteCurrentBoard() {
+  const project = getCurrentProject();
+  const board = getCurrentBoard();
+  if (!project || !board?.id) return;
+  if ((project.boards || []).length <= 1) {
+    alert('Нельзя удалить единственную доску проекта');
+    return;
+  }
+  if (!confirm('Удалить доску «' + board.name + '» и все задачи на ней?')) return;
+  project.boards = project.boards.filter(b => b.id !== board.id);
+  state.currentBoardId = project.boards[0].id;
+  saveState();
+  render();
+  if (isCloudMode && supabase) {
+    try {
+      await supabase.from('boards').delete().eq('id', board.id);
+    } catch (e) { console.warn(e); }
+  }
+}
+
+const btnBoardMenu = document.getElementById('btnBoardMenu');
+const boardMenu = document.getElementById('boardMenu');
+if (btnBoardMenu && boardMenu) {
+  btnBoardMenu.addEventListener('click', (e) => {
+    e.stopPropagation();
+    boardMenu.style.display = boardMenu.style.display === 'none' ? 'block' : 'none';
+  });
+  document.addEventListener('click', () => { boardMenu.style.display = 'none'; });
+  boardMenu.addEventListener('click', (e) => e.stopPropagation());
+}
+const menuRenameBoard = document.getElementById('menuRenameBoard');
+if (menuRenameBoard) menuRenameBoard.addEventListener('click', async () => {
+  if (boardMenu) boardMenu.style.display = 'none';
+  await renameCurrentBoard();
+});
+const menuDeleteBoard = document.getElementById('menuDeleteBoard');
+if (menuDeleteBoard) menuDeleteBoard.addEventListener('click', async () => {
+  if (boardMenu) boardMenu.style.display = 'none';
+  await deleteCurrentBoard();
+});
+
+// legacy id support
 const btnRenameBoard = document.getElementById('btnRenameBoard');
-if (btnRenameBoard) {
-  btnRenameBoard.addEventListener('click', async () => {
-    const board = getCurrentBoard();
-    if (!board?.id) return;
-    const name = prompt('Новое название доски:', board.name);
-    if (!name || !name.trim()) return;
-    board.name = name.trim();
-    saveState();
-    render();
-    await persistBoard(board, getCurrentProject().id);
+if (btnRenameBoard) btnRenameBoard.addEventListener('click', () => renameCurrentBoard());
+
+const filterAssignee = document.getElementById('filterAssignee');
+if (filterAssignee) {
+  filterAssignee.addEventListener('change', () => {
+    boardFilter.assigneeId = filterAssignee.value || '';
+    renderBoard();
   });
 }
+const filterPriority = document.getElementById('filterPriority');
+if (filterPriority) {
+  filterPriority.addEventListener('change', () => {
+    boardFilter.priority = filterPriority.value || '';
+    renderBoard();
+  });
+}
+const btnClearFilters = document.getElementById('btnClearFilters');
+if (btnClearFilters) {
+  btnClearFilters.addEventListener('click', () => {
+    boardFilter = { assigneeId: '', priority: '' };
+    searchQuery = '';
+    const si = document.getElementById('searchInput');
+    if (si) si.value = '';
+    renderFilters();
+    renderBoard();
+  });
+}
+
 
 
 

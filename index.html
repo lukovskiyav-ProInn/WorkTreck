@@ -81,9 +81,27 @@
           <span class="sep">/</span>
           <select id="boardSelect" class="board-select" title="Доска"></select>
           <button type="button" class="btn-icon-sm" id="btnAddBoard" title="Новая доска">+</button>
-          <button type="button" class="btn-icon-sm" id="btnRenameBoard" title="Переименовать доску">✎</button>
+          <div class="board-menu-wrap">
+            <button type="button" class="btn-icon-sm" id="btnBoardMenu" title="Настройки доски">⚙</button>
+            <div class="board-menu" id="boardMenu" style="display:none">
+              <button type="button" id="menuRenameBoard">Переименовать доску</button>
+              <button type="button" id="menuDeleteBoard" class="danger">Удалить доску</button>
+            </div>
+          </div>
         </div>
         <div class="topbar-actions">
+          <div class="filter-group">
+            <select id="filterAssignee" class="filter-select" title="Исполнитель">
+              <option value="">Все исполнители</option>
+            </select>
+            <select id="filterPriority" class="filter-select" title="Приоритет">
+              <option value="">Все приоритеты</option>
+              <option value="urgent">Срочный</option>
+              <option value="high">Высокий</option>
+              <option value="normal">Обычный</option>
+            </select>
+            <button type="button" class="btn-icon-sm" id="btnClearFilters" title="Сбросить фильтры">✕</button>
+          </div>
           <div class="search-box">
             <input type="text" id="searchInput" placeholder="Поиск задач..." />
           </div>

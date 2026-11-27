@@ -538,3 +538,78 @@ body {
   .task-meta { grid-template-columns: 1fr; }
   .search-box input { width: 140px; }
 }
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.filter-select {
+  background: #fff;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  outline: none;
+  max-width: 150px;
+}
+.filter-select:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+.board-menu-wrap {
+  position: relative;
+}
+.board-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  min-width: 180px;
+  z-index: 50;
+  padding: 6px;
+}
+.board-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.board-menu button:hover { background: var(--hover); }
+.board-menu button.danger { color: var(--danger); }
+.board-menu button.danger:hover { background: rgba(220, 38, 38, 0.08); }
+.project-item {
+  position: relative;
+}
+.project-item .proj-actions {
+  display: none;
+  gap: 2px;
+  margin-left: auto;
+}
+.project-item:hover .proj-actions,
+.project-item.active .proj-actions {
+  display: flex;
+}
+.proj-actions button {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.proj-actions button:hover { background: var(--hover); color: var(--primary); }
+.proj-actions button.danger:hover { color: var(--danger); }
