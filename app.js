@@ -126,6 +126,14 @@ let state = (typeof USE_SUPABASE !== 'undefined' && USE_SUPABASE)
   : loadState();
 let searchQuery = '';
 let boardFilter = { assigneeId: '', priority: '', department: '' };
+let currentView = 'board';
+const selectedTaskIds = new Set();
+let activeTimer = null; // { taskId, startedAt }
+const TEMPLATES_KEY = 'yougile-task-templates-v1';
+
+const CARD_COLORS = ['', 'blue', 'green', 'orange', 'red', 'purple', 'pink'];
+const COLOR_HEX = { blue:'#3b82f6', green:'#16a34a', orange:'#d97706', red:'#dc2626', purple:'#7c3aed', pink:'#db2777' };
+
 let currentTaskId = null;
 const expandedSubtasks = new Set(); // task ids with open subtask list
 let chatReplyToId = null;
@@ -147,6 +155,44 @@ function loadState() {
     console.warn('[YouGile] loadState error', e);
   }
   return structuredClone(defaultData);
+}
+
+function logActivity(task, text) {
+  if (!task) return;
+  if (!task.activity) task.activity = [];
+  const user = getCurrentUser();
+  task.activity.unshift({
+    id: uid(),
+    text,
+    userId: state.currentUserId,
+    userName: user?.name || 'Система',
+    time: new Date().toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+  });
+  if (task.activity.length > 50) task.activity.length = 50;
+}
+
+function loadTemplates() {
+  try { return JSON.parse(localStorage.getItem(TEMPLATES_KEY) || '[]'); } catch { return []; }
+}
+function saveTemplates(list) {
+  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(list));
+}
+
+function formatDuration(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return [h, m, s].map(n => String(n).padStart(2, '0')).join(':');
+}
+
+function taskTimeTotal(task) {
+  let total = 0;
+  for (const e of (task.timeEntries || [])) total += e.seconds || 0;
+  if (activeTimer && activeTimer.taskId === task.id) {
+    total += Math.floor((Date.now() - activeTimer.startedAt) / 1000);
+  }
+  return total;
 }
 
 function saveState() {
@@ -546,6 +592,31 @@ function getTaskAssigneeIds(task) {
   return [];
 }
 
+
+function walkSubtasks(subs, fn, depth = 0) {
+  for (const s of subs || []) {
+    fn(s, depth);
+    if (s.children && s.children.length) walkSubtasks(s.children, fn, depth + 1);
+  }
+}
+
+function countSubtasks(subs) {
+  let total = 0, done = 0;
+  walkSubtasks(subs, (s) => { total++; if (s.done) done++; });
+  return { total, done };
+}
+
+function findSubtask(subs, id, parent = null) {
+  for (const s of subs || []) {
+    if (s.id === id) return { sub: s, parent, list: subs };
+    if (s.children) {
+      const f = findSubtask(s.children, id, s);
+      if (f) return f;
+    }
+  }
+  return null;
+}
+
 function setTaskAssignees(task, ids) {
   const unique = Array.from(new Set((ids || []).filter(Boolean)));
   task.assigneeIds = unique;
@@ -655,19 +726,23 @@ function renderBoard() {
 
 function renderCard(task) {
   const subs = task.subtasks || [];
-  const done = subs.filter(s => s.done).length;
-  const total = subs.length;
+  const { total, done } = countSubtasks(subs);
   const progress = total ? Math.round((done / total) * 100) : 0;
   const assignees = getTaskAssigneeIds(task).map(id => getUser(id)).filter(u => u && u.name);
   const filesCount = (task.attachments || []).length;
   const msgCount = (task.messages || []).length;
+  const stickers = task.stickers || [];
   const priorityClass = task.priority === 'urgent' ? 'priority-urgent' : task.priority === 'high' ? 'priority-high' : '';
   const priorityLabel = task.priority === 'urgent' ? '🔥 Срочно' : task.priority === 'high' ? '⚡ Важно' : '';
   const expanded = expandedSubtasks.has(task.id);
+  const selected = selectedTaskIds.has(task.id);
+  const colorClass = task.color ? 'color-' + task.color : '';
+  const flatSubs = [];
+  walkSubtasks(subs, (s, depth) => flatSubs.push({ s, depth }));
   const subList = total ? `
     <div class="card-subtasks ${expanded ? 'open' : ''}" data-subs-for="${task.id}">
-      ${subs.map(s => `
-        <div class="card-subtask ${s.done ? 'done' : ''}" data-sub-id="${s.id}">
+      ${flatSubs.map(({ s, depth }) => `
+        <div class="card-subtask ${s.done ? 'done' : ''}" data-sub-id="${s.id}" style="padding-left:${6 + depth * 14}px">
           <input type="checkbox" class="card-sub-check" data-task-id="${task.id}" data-sub-id="${s.id}" ${s.done ? 'checked' : ''} />
           <span class="card-sub-title">${escapeHtml(s.title)}</span>
         </div>
@@ -675,13 +750,15 @@ function renderCard(task) {
     </div>` : '';
 
   return `
-    <div class="card ${expanded ? 'has-open-subs' : ''}" draggable="true" data-task-id="${task.id}">
+    <div class="card ${expanded ? 'has-open-subs' : ''} ${selected ? 'selected' : ''} ${colorClass}" draggable="true" data-task-id="${task.id}">
+      <input type="checkbox" class="card-check" data-select-task="${task.id}" ${selected ? 'checked' : ''} title="Выбрать" />
       <div class="card-main">
         <div class="card-title">${escapeHtml(task.title)}</div>
         <div class="card-meta">
           ${assignees.length ? `<span class="avatar-stack">${assignees.slice(0,4).map(a => avatarHtml(a)).join('')}${assignees.length > 4 ? `<span class="sticker">+${assignees.length-4}</span>` : ''}</span>` : ''}
           ${task.deadline ? `<span class="sticker deadline">📅 ${formatDate(task.deadline)}</span>` : ''}
           ${priorityLabel ? `<span class="sticker ${priorityClass}">${priorityLabel}</span>` : ''}
+          ${stickers.map(t => `<span class="sticker" style="background:var(--primary-soft);color:var(--primary)">${escapeHtml(t)}</span>`).join('')}
           ${filesCount ? `<span class="sticker">📎 ${filesCount}</span>` : ''}
           ${msgCount ? `<span class="sticker">💬 ${msgCount}</span>` : ''}
         </div>
@@ -768,6 +845,15 @@ function setupDragAndDrop() {
         persistSubtask(sub, taskId);
         return;
       }
+      if (e.target.closest('.card-check')) {
+        e.stopPropagation();
+        const id = e.target.closest('.card-check').dataset.selectTask;
+        if (selectedTaskIds.has(id)) selectedTaskIds.delete(id);
+        else selectedTaskIds.add(id);
+        updateMassBar();
+        renderBoard();
+        return;
+      }
       if (e.target.closest('.card-subtasks')) {
         e.stopPropagation();
         return;
@@ -813,8 +899,16 @@ function openTask(taskId) {
   document.getElementById('taskDeadline').value = task.deadline || '';
   document.getElementById('taskPriority').value = task.priority || 'normal';
   renderSubtasks(task);
+  renderStickers(task);
+  renderColorPicker(task);
   renderAttachments(task);
   renderChat(task);
+  renderTimeTracking(task);
+  renderTaskActivity(task);
+  renderMirrorControls(task);
+  const rec = document.getElementById('taskRecurrence');
+  if (rec) rec.value = task.recurrence || '';
+
   document.getElementById('taskModal').classList.add('open');
   document.getElementById('taskTitle').focus();
 }
@@ -829,12 +923,21 @@ function closeModal() {
       setTaskAssignees(found.task, readSelectedAssigneeIds());
       found.task.deadline = document.getElementById('taskDeadline').value;
       found.task.priority = document.getElementById('taskPriority').value;
+      const recEl = document.getElementById('taskRecurrence');
+      const prevRec = found.task.recurrence || '';
+      found.task.recurrence = recEl ? (recEl.value || '') : '';
+      if (found.task.recurrence !== prevRec) {
+        logActivity(found.task, found.task.recurrence ? ('Повтор: ' + found.task.recurrence) : 'Повтор отключён');
+      }
+
       const newIds = getTaskAssigneeIds(found.task).filter(id => !prevIds.includes(id));
       for (const uid of newIds) {
         const user = getUser(uid);
         console.log('[Уведомление] Задача "' + found.task.title + '" назначена на ' + user.name + ' (' + user.email + ')');
         notifyTask({ type: 'assigned', userId: uid, taskTitle: found.task.title });
       }
+      syncMirrors(found.task);
+      logActivity(found.task, 'Задача обновлена');
       saveState(); render(); persistTask(found.task, found.column.id);
     }
   }
@@ -856,21 +959,87 @@ function deleteCurrentTask() {
   }
 }
 
+
+function renderStickers(task) {
+  const box = document.getElementById('taskStickers');
+  if (!box) return;
+  if (!task.stickers) task.stickers = [];
+  box.innerHTML = task.stickers.map((t, i) =>
+    `<span class="sticker-chip">${escapeHtml(t)} <button type="button" data-i="${i}">×</button></span>`
+  ).join('') || '<span style="color:var(--text-muted);font-size:12px">Нет тегов</span>';
+  box.querySelectorAll('button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      task.stickers.splice(+btn.dataset.i, 1);
+      saveState();
+      renderStickers(task);
+      renderBoard();
+    });
+  });
+}
+
+function renderColorPicker(task) {
+  const box = document.getElementById('taskColors');
+  if (!box) return;
+  box.innerHTML = CARD_COLORS.map(c => {
+    const bg = c ? COLOR_HEX[c] : '#e5e7eb';
+    return `<button type="button" class="color-dot ${task.color === c ? 'active' : ''}" data-color="${c}" style="background:${bg}" title="${c || 'нет'}"></button>`;
+  }).join('');
+  box.querySelectorAll('.color-dot').forEach(btn => {
+    btn.addEventListener('click', () => {
+      task.color = btn.dataset.color || '';
+      saveState();
+      renderColorPicker(task);
+      renderBoard();
+      persistTask(task, findTask(task.id)?.column?.id);
+    });
+  });
+}
+
 function renderSubtasks(task) {
   if (!task.subtasks) task.subtasks = [];
   const list = document.getElementById('subtasksList');
-  const done = task.subtasks.filter(s => s.done).length;
-  document.getElementById('subtasksProgress').textContent = task.subtasks.length ? '(' + done + '/' + task.subtasks.length + ')' : '';
-  list.innerHTML = task.subtasks.map(s => `
-    <div class="subtask-item ${s.done ? 'done' : ''}">
-      <input type="checkbox" data-id="${s.id}" ${s.done ? 'checked' : ''} />
-      <span>${escapeHtml(s.title)}</span>
-    </div>
-  `).join('');
+  if (!list) return;
+  const { total, done } = countSubtasks(task.subtasks);
+  const prog = document.getElementById('subtasksProgress');
+  if (prog) prog.textContent = total ? '(' + done + '/' + total + ')' : '';
+
+  function rows(subs, depth) {
+    return (subs || []).map(s => `
+      <div class="subtask-item ${s.done ? 'done' : ''}" style="padding-left:${depth * 18}px">
+        <input type="checkbox" data-id="${s.id}" ${s.done ? 'checked' : ''} />
+        <span style="flex:1">${escapeHtml(s.title)}</span>
+        <button type="button" class="subtask-add-child" data-parent="${s.id}" title="Вложенная">+</button>
+      </div>
+      ${s.children && s.children.length ? rows(s.children, depth + 1) : ''}
+    `).join('');
+  }
+  list.innerHTML = rows(task.subtasks, 0) || '<div style="color:var(--text-muted);font-size:12px">Нет пунктов чек-листа</div>';
+
   list.querySelectorAll('input[type="checkbox"]').forEach(cb => {
     cb.addEventListener('change', () => {
-      const sub = task.subtasks.find(s => s.id === cb.dataset.id);
-      if (sub) { sub.done = cb.checked; saveState(); renderSubtasks(task); render(); persistSubtask(sub, task.id); }
+      const found = findSubtask(task.subtasks, cb.dataset.id);
+      if (found) {
+        found.sub.done = cb.checked;
+        saveState();
+        renderSubtasks(task);
+        renderBoard();
+        persistSubtask(found.sub, task.id);
+      }
+    });
+  });
+  list.querySelectorAll('.subtask-add-child').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const title = prompt('Вложенная подзадача:');
+      if (!title || !title.trim()) return;
+      const found = findSubtask(task.subtasks, btn.dataset.parent);
+      if (!found) return;
+      if (!found.sub.children) found.sub.children = [];
+      const sub = { id: uid(), title: title.trim(), done: false, children: [] };
+      found.sub.children.push(sub);
+      saveState();
+      renderSubtasks(task);
+      renderBoard();
+      persistSubtask(sub, task.id);
     });
   });
 }
@@ -1107,7 +1276,8 @@ document.getElementById('btnAddTask').addEventListener('click', async () => {
   if (!board.columns.length) { alert('Сначала создайте колонку'); return; }
   const title = prompt('Название задачи:');
   if (!title || !title.trim()) return;
-  const task = { id: uid(), title: title.trim(), description: '', assigneeId: null, deadline: '', priority: 'normal', subtasks: [], attachments: [], messages: [] };
+  const task = { id: uid(), title: title.trim(), description: '', assigneeId: null, assigneeIds: [], deadline: '', priority: 'normal', subtasks: [], attachments: [], messages: [], stickers: [], color: '', timeEntries: [], activity: [], recurrence: '', mirrorIds: [] };
+  logActivity(task, 'Задача создана');
   board.columns[0].tasks.unshift(task);
   saveState(); render(); openTask(task.id);
   await persistTask(task, board.columns[0].id);
@@ -1212,6 +1382,21 @@ document.addEventListener('keydown', e => {
   }
 });
 
+document.getElementById('btnAddSticker')?.addEventListener('click', () => {
+  if (!currentTaskId) return;
+  const input = document.getElementById('newSticker');
+  const text = (input?.value || '').trim();
+  if (!text) return;
+  const found = findTask(currentTaskId);
+  if (!found) return;
+  if (!found.task.stickers) found.task.stickers = [];
+  if (!found.task.stickers.includes(text)) found.task.stickers.push(text);
+  if (input) input.value = '';
+  saveState();
+  renderStickers(found.task);
+  renderBoard();
+});
+
 document.getElementById('btnAddSubtask').addEventListener('click', async () => {
   if (!currentTaskId) return;
   const input = document.getElementById('newSubtask');
@@ -1220,7 +1405,7 @@ document.getElementById('btnAddSubtask').addEventListener('click', async () => {
   const found = findTask(currentTaskId);
   if (found) {
     if (!found.task.subtasks) found.task.subtasks = [];
-    const sub = { id: uid(), title, done: false };
+    const sub = { id: uid(), title, done: false, children: [] };
     found.task.subtasks.push(sub);
     input.value = '';
     saveState(); renderSubtasks(found.task); render();
@@ -1795,12 +1980,364 @@ async function onCloudReady() {
     if (me && me.role === 'owner') await persistProject(state.projects[0]);
   }
   hideAuth();
+  processRecurringTasks();
   render();
 }
 
 function splitEmail(email) {
   return (email || '').split('@')[0] || 'Пользователь';
 }
+
+
+// ===================== TIME / TEMPLATES / MIRROR / ACTIVITY =====================
+function renderTimeTracking(task) {
+  if (!task.timeEntries) task.timeEntries = [];
+  const totalEl = document.getElementById('timeTotal');
+  const log = document.getElementById('timeLog');
+  const btn = document.getElementById('btnTimerToggle');
+  const disp = document.getElementById('timerDisplay');
+  const running = activeTimer && activeTimer.taskId === task.id;
+  if (btn) btn.textContent = running ? '⏹ Стоп' : '▶ Старт';
+  if (totalEl) totalEl.textContent = 'Всего: ' + formatDuration(taskTimeTotal(task));
+  if (log) {
+    log.innerHTML = (task.timeEntries || []).slice().reverse().slice(0, 8).map(e => {
+      const u = getUser(e.userId);
+      return `<div>${formatDuration(e.seconds)} · ${escapeHtml(u?.name || '—')} · ${e.time || ''}</div>`;
+    }).join('') || '<div>Записей пока нет</div>';
+  }
+  if (disp) {
+    if (running) {
+      const tick = () => {
+        if (!activeTimer || activeTimer.taskId !== task.id) return;
+        disp.textContent = formatDuration((Date.now() - activeTimer.startedAt) / 1000);
+        requestAnimationFrame(() => setTimeout(tick, 500));
+      };
+      tick();
+    } else {
+      disp.textContent = '00:00:00';
+    }
+  }
+}
+
+function renderTaskActivity(task) {
+  const box = document.getElementById('taskActivity');
+  if (!box) return;
+  const list = task.activity || [];
+  box.innerHTML = list.length
+    ? list.map(a => `<div class="activity-item"><strong>${escapeHtml(a.userName)}</strong> — ${escapeHtml(a.text)} <span style="opacity:.7">· ${a.time}</span></div>`).join('')
+    : '<div>История пуста</div>';
+}
+
+function renderMirrorControls(task) {
+  const sel = document.getElementById('mirrorBoardSelect');
+  const info = document.getElementById('mirrorInfo');
+  if (!sel) return;
+  const options = [];
+  for (const p of state.projects || []) {
+    for (const b of p.boards || []) {
+      if (b.id === state.currentBoardId) continue;
+      options.push({ id: b.id, label: p.name + ' / ' + b.name });
+    }
+  }
+  sel.innerHTML = '<option value="">Выберите доску…</option>' +
+    options.map(o => `<option value="${o.id}">${escapeHtml(o.label)}</option>`).join('');
+  if (info) {
+    const n = (task.mirrorIds || []).length;
+    info.textContent = n ? ('Связано копий: ' + n) : 'Зеркало создаёт связанную копию задачи на другой доске';
+  }
+}
+
+document.getElementById('btnTimerToggle')?.addEventListener('click', () => {
+  if (!currentTaskId) return;
+  const found = findTask(currentTaskId);
+  if (!found) return;
+  if (!found.task.timeEntries) found.task.timeEntries = [];
+
+  if (activeTimer && activeTimer.taskId === currentTaskId) {
+    const seconds = Math.floor((Date.now() - activeTimer.startedAt) / 1000);
+    if (seconds > 0) {
+      found.task.timeEntries.push({
+        id: uid(),
+        userId: state.currentUserId,
+        seconds,
+        time: new Date().toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+      });
+      logActivity(found.task, 'Учтено время ' + formatDuration(seconds));
+    }
+    activeTimer = null;
+  } else {
+    if (activeTimer) {
+      // stop previous on another task
+      const prev = findTask(activeTimer.taskId);
+      if (prev) {
+        const seconds = Math.floor((Date.now() - activeTimer.startedAt) / 1000);
+        if (seconds > 0) {
+          if (!prev.task.timeEntries) prev.task.timeEntries = [];
+          prev.task.timeEntries.push({
+            id: uid(), userId: state.currentUserId, seconds,
+            time: new Date().toLocaleString('ru-RU', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+          });
+        }
+      }
+    }
+    activeTimer = { taskId: currentTaskId, startedAt: Date.now() };
+    logActivity(found.task, 'Таймер запущен');
+  }
+  saveState();
+  renderTimeTracking(found.task);
+  renderTaskActivity(found.task);
+});
+
+document.getElementById('btnSaveTemplate')?.addEventListener('click', () => {
+  if (!currentTaskId) return;
+  const found = findTask(currentTaskId);
+  if (!found) return;
+  const list = loadTemplates();
+  list.unshift({
+    id: uid(),
+    title: found.task.title,
+    description: found.task.description || '',
+    priority: found.task.priority || 'normal',
+    stickers: found.task.stickers || [],
+    subtasks: JSON.parse(JSON.stringify(found.task.subtasks || [])),
+    recurrence: found.task.recurrence || '',
+    createdAt: Date.now()
+  });
+  saveTemplates(list.slice(0, 30));
+  alert('Шаблон сохранён: ' + found.task.title);
+});
+
+document.getElementById('btnMirrorTask')?.addEventListener('click', async () => {
+  if (!currentTaskId) return;
+  const found = findTask(currentTaskId);
+  if (!found) return;
+  const boardId = document.getElementById('mirrorBoardSelect')?.value;
+  if (!boardId) { alert('Выберите доску'); return; }
+  let targetBoard = null;
+  let targetProject = null;
+  for (const p of state.projects) {
+    const b = (p.boards || []).find(x => x.id === boardId);
+    if (b) { targetBoard = b; targetProject = p; break; }
+  }
+  if (!targetBoard || !targetBoard.columns?.length) {
+    alert('На целевой доске нет колонок');
+    return;
+  }
+  const mirrorId = uid();
+  const mirror = {
+    id: mirrorId,
+    title: found.task.title,
+    description: found.task.description || '',
+    assigneeId: found.task.assigneeId,
+    assigneeIds: [...getTaskAssigneeIds(found.task)],
+    deadline: found.task.deadline || '',
+    priority: found.task.priority || 'normal',
+    stickers: [...(found.task.stickers || [])],
+    color: found.task.color || '',
+    subtasks: JSON.parse(JSON.stringify(found.task.subtasks || [])),
+    attachments: [],
+    messages: [],
+    timeEntries: [],
+    activity: [],
+    recurrence: '',
+    mirrorOf: found.task.id,
+    mirrorIds: [found.task.id]
+  };
+  if (!found.task.mirrorIds) found.task.mirrorIds = [];
+  found.task.mirrorIds.push(mirrorId);
+  logActivity(found.task, 'Создано зеркало на «' + targetBoard.name + '»');
+  logActivity(mirror, 'Зеркало задачи «' + found.task.title + '»');
+  targetBoard.columns[0].tasks.unshift(mirror);
+  saveState();
+  renderMirrorControls(found.task);
+  renderTaskActivity(found.task);
+  await persistTask(mirror, targetBoard.columns[0].id);
+  alert('Зеркальная задача создана на доске «' + targetBoard.name + '»');
+});
+
+// Sync title/status to mirrors on closeModal - patch after setTaskAssignees block
+function syncMirrors(sourceTask) {
+  if (!sourceTask.mirrorIds || !sourceTask.mirrorIds.length) return;
+  for (const mid of sourceTask.mirrorIds) {
+    const m = findTask(mid);
+    if (!m) continue;
+    m.task.title = sourceTask.title;
+    m.task.description = sourceTask.description;
+    m.task.priority = sourceTask.priority;
+    m.task.deadline = sourceTask.deadline;
+    m.task.stickers = [...(sourceTask.stickers || [])];
+    setTaskAssignees(m.task, getTaskAssigneeIds(sourceTask));
+    logActivity(m.task, 'Синхронизировано с оригиналом');
+    persistTask(m.task, m.column.id);
+  }
+}
+
+function openTimeReport() {
+  const body = document.getElementById('timeReportBody');
+  const modal = document.getElementById('timeReportModal');
+  if (!body || !modal) return;
+  const byUser = {};
+  for (const p of state.projects || []) {
+    for (const b of p.boards || []) {
+      for (const c of b.columns || []) {
+        for (const t of c.tasks || []) {
+          for (const e of (t.timeEntries || [])) {
+            if (!byUser[e.userId]) byUser[e.userId] = { seconds: 0, tasks: {} };
+            byUser[e.userId].seconds += e.seconds || 0;
+            byUser[e.userId].tasks[t.id] = (byUser[e.userId].tasks[t.id] || 0) + (e.seconds || 0);
+          }
+        }
+      }
+    }
+  }
+  const rows = Object.entries(byUser).map(([uid, data]) => {
+    const u = getUser(uid);
+    const top = Object.entries(data.tasks).sort((a,b)=>b[1]-a[1]).slice(0,3)
+      .map(([tid, sec]) => {
+        const f = findTask(tid);
+        return (f?.task.title || tid) + ' (' + formatDuration(sec) + ')';
+      }).join(', ');
+    return `<tr>
+      <td>${escapeHtml(u?.name || uid)}</td>
+      <td>${formatDuration(data.seconds)}</td>
+      <td style="font-size:12px;color:var(--text-muted)">${escapeHtml(top)}</td>
+    </tr>`;
+  });
+  body.innerHTML = rows.length ? `
+    <table class="company-table">
+      <thead><tr><th>Сотрудник</th><th>Всего</th><th>Задачи</th></tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table>` : '<div style="color:var(--text-muted)">Пока нет записей времени</div>';
+  modal.classList.add('open');
+}
+
+function openTemplatesModal() {
+  const body = document.getElementById('templatesBody');
+  const modal = document.getElementById('templatesModal');
+  if (!body || !modal) return;
+  const list = loadTemplates();
+  body.innerHTML = list.length ? list.map(t => `
+    <div class="myday-item" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <div>
+        <strong>${escapeHtml(t.title)}</strong>
+        <div style="font-size:12px;color:var(--text-muted)">${t.recurrence ? 'Повтор: ' + t.recurrence : 'Разовый шаблон'} · ${(t.subtasks||[]).length} подзадач</div>
+      </div>
+      <div style="display:flex;gap:6px">
+        <button type="button" class="btn primary tpl-use" data-id="${t.id}">Создать</button>
+        <button type="button" class="btn tpl-del" data-id="${t.id}">×</button>
+      </div>
+    </div>
+  `).join('') : '<div style="color:var(--text-muted)">Нет шаблонов. Откройте задачу и нажмите «В шаблоны».</div>';
+  body.querySelectorAll('.tpl-use').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const tpl = loadTemplates().find(x => x.id === btn.dataset.id);
+      if (!tpl) return;
+      const board = getCurrentBoard();
+      if (!board.columns?.length) return alert('Нет колонок');
+      const task = {
+        id: uid(),
+        title: tpl.title,
+        description: tpl.description || '',
+        assigneeId: null,
+        assigneeIds: [],
+        deadline: '',
+        priority: tpl.priority || 'normal',
+        subtasks: JSON.parse(JSON.stringify(tpl.subtasks || [])),
+        stickers: [...(tpl.stickers || [])],
+        attachments: [],
+        messages: [],
+        timeEntries: [],
+        activity: [],
+        recurrence: tpl.recurrence || '',
+        color: '',
+        mirrorIds: []
+      };
+      logActivity(task, 'Создано из шаблона');
+      board.columns[0].tasks.unshift(task);
+      saveState();
+      render();
+      await persistTask(task, board.columns[0].id);
+      modal.classList.remove('open');
+      openTask(task.id);
+    });
+  });
+  body.querySelectorAll('.tpl-del').forEach(btn => {
+    btn.addEventListener('click', () => {
+      saveTemplates(loadTemplates().filter(x => x.id !== btn.dataset.id));
+      openTemplatesModal();
+    });
+  });
+  modal.classList.add('open');
+}
+
+// Recurring tasks: on load, spawn due copies
+function processRecurringTasks() {
+  const today = new Date().toISOString().slice(0, 10);
+  let changed = false;
+  for (const p of state.projects || []) {
+    for (const b of p.boards || []) {
+      for (const c of b.columns || []) {
+        for (const t of [...(c.tasks || [])]) {
+          if (!t.recurrence) continue;
+          const last = t.lastSpawned || t.createdAt || '';
+          const lastDay = String(last).slice(0, 10);
+          let due = false;
+          if (t.recurrence === 'daily' && lastDay !== today) due = true;
+          if (t.recurrence === 'weekly') {
+            const ld = lastDay ? new Date(lastDay) : null;
+            if (!ld || (Date.now() - ld.getTime()) > 6 * 86400000) due = true;
+          }
+          if (t.recurrence === 'monthly') {
+            const ld = lastDay ? new Date(lastDay) : null;
+            if (!ld || (Date.now() - ld.getTime()) > 27 * 86400000) due = true;
+          }
+          if (!due) continue;
+          // spawn only if original is in "Готово"-like column or always? spawn into first column as new open task
+          const clone = {
+            id: uid(),
+            title: t.title,
+            description: t.description || '',
+            assigneeId: t.assigneeId,
+            assigneeIds: [...getTaskAssigneeIds(t)],
+            deadline: '',
+            priority: t.priority,
+            subtasks: JSON.parse(JSON.stringify(t.subtasks || [])).map(s => ({ ...s, done: false, children: (s.children||[]).map(ch => ({...ch, done:false})) })),
+            stickers: [...(t.stickers || [])],
+            attachments: [],
+            messages: [],
+            timeEntries: [],
+            activity: [],
+            recurrence: t.recurrence,
+            color: t.color || '',
+            mirrorIds: [],
+            lastSpawned: today
+          };
+          logActivity(clone, 'Создано по расписанию (' + t.recurrence + ')');
+          const firstCol = b.columns[0];
+          if (firstCol) firstCol.tasks.unshift(clone);
+          t.lastSpawned = today;
+          changed = true;
+        }
+      }
+    }
+  }
+  if (changed) saveState();
+}
+
+document.getElementById('menuTimeReport')?.addEventListener('click', () => {
+  document.getElementById('boardMenu').style.display = 'none';
+  openTimeReport();
+});
+document.getElementById('menuFromTemplate')?.addEventListener('click', () => {
+  document.getElementById('boardMenu').style.display = 'none';
+  openTemplatesModal();
+});
+document.getElementById('closeTimeReport')?.addEventListener('click', () => {
+  document.getElementById('timeReportModal')?.classList.remove('open');
+});
+document.getElementById('closeTemplatesModal')?.addEventListener('click', () => {
+  document.getElementById('templatesModal')?.classList.remove('open');
+});
 
 async function initApp() {
   console.log('[YouGile] initApp start');
@@ -1992,6 +2529,194 @@ window.__authSubmit = handleAuthSubmit;
 
 
 // Board switch / add / rename
+
+function updateMassBar() {
+  const bar = document.getElementById('massBar');
+  const count = document.getElementById('massCount');
+  if (!bar) return;
+  if (selectedTaskIds.size === 0) {
+    bar.style.display = 'none';
+    return;
+  }
+  bar.style.display = 'flex';
+  if (count) count.textContent = selectedTaskIds.size + ' выбрано';
+  const asg = document.getElementById('massAssignee');
+  if (asg) {
+    asg.innerHTML = '<option value="">Назначить…</option>' +
+      (state.users || []).map(u => `<option value="${u.id}">${escapeHtml(u.name)}</option>`).join('');
+  }
+  const col = document.getElementById('massColumn');
+  if (col) {
+    const board = getCurrentBoard();
+    col.innerHTML = '<option value="">В колонку…</option>' +
+      (board.columns || []).map(c => `<option value="${c.id}">${escapeHtml(c.title)}</option>`).join('');
+  }
+}
+
+function setView(view) {
+  currentView = view;
+  document.querySelectorAll('.view-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.view === view);
+  });
+  const map = {
+    board: 'viewBoard',
+    myday: 'viewMyday',
+    calendar: 'viewCalendar',
+    gantt: 'viewGantt'
+  };
+  Object.entries(map).forEach(([k, id]) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = k === view ? (k === 'board' ? 'flex' : 'block') : 'none';
+  });
+  if (view === 'board') renderBoard();
+  if (view === 'myday') renderMyDay();
+  if (view === 'calendar') renderCalendar();
+  if (view === 'gantt') renderGanttView();
+}
+
+function allVisibleTasks() {
+  const out = [];
+  const board = getCurrentBoard();
+  for (const col of board.columns || []) {
+    for (const t of col.tasks || []) {
+      if (canViewTask(t)) out.push({ task: t, column: col });
+    }
+  }
+  return out;
+}
+
+function renderMyDay() {
+  const box = document.getElementById('viewMyday');
+  if (!box) return;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const mine = allVisibleTasks().filter(({ task }) => getTaskAssigneeIds(task).includes(state.currentUserId));
+  const overdue = [];
+  const todayList = [];
+  const later = [];
+  for (const item of mine) {
+    if (!item.task.deadline) { later.push(item); continue; }
+    const d = new Date(item.task.deadline); d.setHours(0,0,0,0);
+    if (d < today) overdue.push(item);
+    else if (d.getTime() === today.getTime()) todayList.push(item);
+    else later.push(item);
+  }
+  function block(title, items) {
+    if (!items.length) return '';
+    return `<div class="myday-section"><h3>${title} (${items.length})</h3>${items.map(({ task, column }) =>
+      `<div class="myday-item" data-id="${task.id}">
+        <strong>${escapeHtml(task.title)}</strong>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${escapeHtml(column.title)}${task.deadline ? ' · ' + formatDate(task.deadline) : ''}</div>
+      </div>`
+    ).join('')}</div>`;
+  }
+  box.innerHTML = `<h2 style="margin:0 0 16px;font-size:18px">Мой день</h2>` +
+    (mine.length ? block('Просрочено', overdue) + block('Сегодня', todayList) + block('Без срока / позже', later)
+      : '<div style="color:var(--text-muted)">Нет назначенных вам задач</div>');
+  box.querySelectorAll('.myday-item').forEach(el => {
+    el.addEventListener('click', () => openTask(el.dataset.id));
+  });
+}
+
+function renderCalendar() {
+  const box = document.getElementById('viewCalendar');
+  if (!box) return;
+  const start = new Date();
+  start.setHours(0,0,0,0);
+  const day = start.getDay() || 7;
+  start.setDate(start.getDate() - day + 1);
+  const tasks = allVisibleTasks();
+  let html = '<h2 style="margin:0 0 12px;font-size:18px">Календарь (неделя)</h2><div class="cal-grid">';
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(start); d.setDate(start.getDate() + i);
+    const key = d.toISOString().slice(0, 10);
+    const isToday = new Date().toISOString().slice(0, 10) === key;
+    const dayTasks = tasks.filter(({ task }) => task.deadline && task.deadline.slice(0, 10) === key);
+    html += `<div class="cal-day ${isToday ? 'today' : ''}">
+      <div class="cal-day-head">${d.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'short' })}</div>
+      ${dayTasks.map(({ task }) => `<div class="cal-task" data-id="${task.id}">${escapeHtml(task.title)}</div>`).join('') || '<div style="font-size:11px;color:var(--text-muted)">—</div>'}
+    </div>`;
+  }
+  html += '</div>';
+  box.innerHTML = html;
+  box.querySelectorAll('.cal-task').forEach(el => el.addEventListener('click', () => openTask(el.dataset.id)));
+}
+
+function renderGanttView() {
+  const box = document.getElementById('viewGantt');
+  if (!box) return;
+  const items = allVisibleTasks();
+  if (!items.length) {
+    box.innerHTML = '<div style="color:var(--text-muted)">Нет задач</div>';
+    return;
+  }
+  const now = new Date(); now.setHours(0,0,0,0);
+  const rangeStart = new Date(now); rangeStart.setDate(rangeStart.getDate() - 7);
+  let rangeEnd = new Date(now); rangeEnd.setDate(rangeEnd.getDate() + 45);
+  for (const { task } of items) {
+    if (task.deadline) {
+      const d = new Date(task.deadline);
+      if (d > rangeEnd) rangeEnd = d;
+    }
+  }
+  const range = Math.max(1, (rangeEnd - rangeStart) / 86400000);
+  box.innerHTML = '<h2 style="margin:0 0 12px;font-size:18px">Диаграмма Ганта</h2><div class="gantt-view timeline-chart">' +
+    items.map(({ task, column }) => {
+      const has = !!task.deadline;
+      const end = has ? new Date(task.deadline) : new Date(now.getTime() + 7 * 86400000);
+      const startT = task.startDate ? new Date(task.startDate) : new Date(end.getTime() - 5 * 86400000);
+      const left = Math.max(0, ((startT - rangeStart) / 86400000) / range * 100);
+      const width = Math.max(3, ((end - startT) / 86400000) / range * 100);
+      const cls = task.priority === 'urgent' ? 'urgent' : task.priority === 'high' ? 'high' : '';
+      return `<div class="tl-row" data-id="${task.id}" style="cursor:pointer">
+        <div class="tl-label">${escapeHtml(task.title)}</div>
+        <div>
+          <div class="tl-bar-track"><div class="tl-bar ${cls}" style="left:${left}%;width:${width}%"></div></div>
+          <div class="tl-meta">${escapeHtml(column.title)}${has ? ' · до ' + formatDate(task.deadline) : ''}</div>
+        </div>
+      </div>`;
+    }).join('') + '</div>';
+  box.querySelectorAll('.tl-row').forEach(el => el.addEventListener('click', () => openTask(el.dataset.id)));
+}
+
+document.querySelectorAll('.view-tab').forEach(tab => {
+  tab.addEventListener('click', () => setView(tab.dataset.view));
+});
+
+document.getElementById('btnMassClear')?.addEventListener('click', () => {
+  selectedTaskIds.clear();
+  updateMassBar();
+  renderBoard();
+});
+
+document.getElementById('btnMassApply')?.addEventListener('click', async () => {
+  if (!selectedTaskIds.size) return;
+  const asg = document.getElementById('massAssignee')?.value || '';
+  const colId = document.getElementById('massColumn')?.value || '';
+  const pri = document.getElementById('massPriority')?.value || '';
+  for (const id of Array.from(selectedTaskIds)) {
+    const found = findTask(id);
+    if (!found) continue;
+    if (asg) {
+      const ids = getTaskAssigneeIds(found.task);
+      if (!ids.includes(asg)) {
+        ids.push(asg);
+        setTaskAssignees(found.task, ids);
+        notifyTask({ type: 'assigned', userId: asg, taskTitle: found.task.title });
+      }
+    }
+    if (pri) found.task.priority = pri;
+    if (colId && colId !== found.column.id) {
+      moveTask(id, colId);
+    } else {
+      await persistTask(found.task, found.column.id);
+    }
+  }
+  saveState();
+  selectedTaskIds.clear();
+  updateMassBar();
+  render();
+});
+
 const boardSelectEl = document.getElementById('boardSelect');
 if (boardSelectEl) {
   boardSelectEl.addEventListener('change', () => {
