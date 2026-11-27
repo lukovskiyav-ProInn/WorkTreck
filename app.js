@@ -747,12 +747,14 @@ function renderCard(task) {
   const colorClass = task.color ? 'color-' + task.color : '';
   const flatSubs = [];
   walkSubtasks(subs, (s, depth) => flatSubs.push({ s, depth }));
+
   const subList = total ? `
     <div class="card-subtasks ${expanded ? 'open' : ''}" data-subs-for="${task.id}">
       ${flatSubs.map(({ s, depth }) => `
         <div class="card-subtask ${s.done ? 'done' : ''}" data-sub-id="${s.id}" style="padding-left:${6 + depth * 14}px">
           <input type="checkbox" class="card-sub-check" data-task-id="${task.id}" data-sub-id="${s.id}" ${s.done ? 'checked' : ''} />
           <span class="card-sub-title">${escapeHtml(s.title)}</span>
+          <button type="button" class="sub-settings-btn" data-sub-id="${s.id}" data-task-id="${task.id}" title="Настройки подзадачи">⚙️</button>
         </div>
       `).join('')}
     </div>` : '';
@@ -761,7 +763,10 @@ function renderCard(task) {
     <div class="card ${expanded ? 'has-open-subs' : ''} ${selected ? 'selected' : ''} ${colorClass}" draggable="true" data-task-id="${task.id}">
       <input type="checkbox" class="card-check" data-select-task="${task.id}" ${selected ? 'checked' : ''} title="Выбрать" />
       <div class="card-main">
-        <div class="card-title">${escapeHtml(task.title)}</div>
+        <div class="card-title-row">
+          <div class="card-title">${escapeHtml(task.title)}</div>
+          <button type="button" class="card-settings-btn" data-edit-task="${task.id}" title="Редактор задачи">⋮</button>
+        </div>
         <div class="card-meta">
           ${assignees.length ? `<span class="avatar-stack">${assignees.slice(0,4).map(a => avatarHtml(a)).join('')}${assignees.length > 4 ? `<span class="sticker">+${assignees.length-4}</span>` : ''}</span>` : ''}
           ${task.deadline ? `<span class="sticker deadline">📅 ${formatDate(task.deadline)}</span>` : ''}
@@ -813,22 +818,6 @@ function avatarHtml(user, sizeClass) {
 
 let draggedTaskId = null;
 
-function setupDragAndDrop() {
-  document.querySelectorAll('.card').forEach(card => {
-    card.addEventListener('dragstart', e => {
-      if (e.target.closest('.card-subtasks, .subtasks-toggle, .card-sub-check')) {
-        e.preventDefault();
-        return;
-      }
-      draggedTaskId = card.dataset.taskId;
-      card.classList.add('dragging');
-      e.dataTransfer.effectAllowed = 'move';
-    });
-    card.addEventListener('dragend', () => {
-      card.classList.remove('dragging');
-      draggedTaskId = null;
-      document.querySelectorAll('.column-cards').forEach(z => z.classList.remove('drag-over'));
-    });
     card.addEventListener('click', (e) => {
       if (e.target.closest('.subtasks-toggle')) {
         e.stopPropagation();
@@ -836,6 +825,18 @@ function setupDragAndDrop() {
         if (expandedSubtasks.has(id)) expandedSubtasks.delete(id);
         else expandedSubtasks.add(id);
         renderBoard();
+        return;
+      }
+      if (e.target.closest('.card-settings-btn')) {
+        e.stopPropagation();
+        openTask(e.target.closest('.card-settings-btn').dataset.editTask);
+        return;
+      }
+      if (e.target.closest('.sub-settings-btn')) {
+        e.stopPropagation();
+        const subId = e.target.closest('.sub-settings-btn').dataset.subId;
+        const taskId = e.target.closest('.sub-settings-btn').dataset.taskId;
+        openSubtaskSettings(taskId, subId);
         return;
       }
       if (e.target.closest('.card-sub-check')) {
@@ -866,7 +867,8 @@ function setupDragAndDrop() {
         e.stopPropagation();
         return;
       }
-      openTask(card.dataset.taskId);
+      // По умолчанию клик по карточке открывает ЧАТ, а не редактор
+      openTaskChatPanel(card.dataset.taskId);
     });
   });
   document.querySelectorAll('.column-cards').forEach(zone => {
@@ -890,6 +892,44 @@ function moveTask(taskId, targetColId) {
   const targetCol = getCurrentBoard().columns.find(c => c.id === targetColId);
   if (targetCol) targetCol.tasks.push(task);
   saveState(); render(); persistTask(task, targetColId);
+}
+
+function openSubtaskSettings(taskId, subId) {
+  const found = findTask(taskId);
+  if (!found) return;
+  const foundSub = findSubtask(found.task.subtasks, subId);
+  if (!foundSub) return;
+  const sub = foundSub.sub;
+
+  // Простое модальное окно через prompt для исполнителей
+  // (если хотите красивое окно — можно сделать отдельный HTML-модал)
+  const currentAssignees = (sub.assigneeIds || []).map(id => getUser(id)?.name).join(', ');
+  
+  // Выбор исполнителей
+  const usersList = state.users.map((u, i) => `${i + 1}. ${u.name}`).join('\n');
+  const answer = prompt(
+    `Настройки подзадачи: ${sub.title}\n\nТекущие исполнители: ${currentAssignees || 'нет'}\n\nВведите номера исполнителей через запятую (или оставьте пустым, чтобы снять всех):\n\n${usersList}`
+  );
+  
+  if (answer === null) return; // отмена
+  
+  if (answer.trim() === '') {
+    sub.assigneeIds = [];
+  } else {
+    const indices = answer.split(',').map(s => parseInt(s.trim()) - 1).filter(i => !isNaN(i) && state.users[i]);
+    sub.assigneeIds = indices.map(i => state.users[i].id);
+  }
+  
+  saveState();
+  renderBoard();
+  // Если подзадача в облаке, сохраняем её
+  persistSubtask(sub, taskId);
+  
+  // Обновляем редактор, если он открыт
+  if (currentTaskId === taskId) {
+    const task = found.task;
+    renderSubtasks(task);
+  }
 }
 
 function openTask(taskId) {
